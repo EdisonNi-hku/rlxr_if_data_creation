@@ -1,13 +1,6 @@
 # Verifiable Constraint Data Creation
 
-This repository provides tools for adding verifiable constraints to instruction-following data. It uses the IFEvalG constraint library (from [AllenAI's open-instruct](https://github.com/allenai/open-instruct)) to augment existing instruction datasets with verifiable constraints.
-
-## Overview
-
-The goal is to create training data where:
-1. Each instruction has one or more verifiable constraints added
-2. Constraints can be programmatically verified (e.g., word count, specific keywords, formatting)
-3. Output format matches [allenai/IF_multi_constraints_upto5](https://huggingface.co/datasets/allenai/IF_multi_constraints_upto5)
+This repository provides tools for adding verifiable constraints to instruction-following data. It supports two approaches: heuristic constraints with programmatic verification (IFEvalG) and LLM-assisted constraint generation with prompt-based evaluation.
 
 ## Installation
 
@@ -17,42 +10,108 @@ pip install -r requirements.txt
 
 NLTK data will be automatically downloaded on first use.
 
-## Usage
+---
 
-### Script Utilities
+## Two Approaches to Creating Constraint-Augmented Data
 
-- `create_constraint_data.py`: Samples non-conflicting IFEvalG constraints and appends them to instructions, producing JSONL training data with verifiable ground truth.
-- `verify_constraints.py`: Checks responses against stored constraint ground truth, supports single checks, batch verification, and accuracy stats.
+### Approach 1: IFEvalG Heuristics (Python-Verifiable)
 
-### Basic Usage
+Uses the IFEvalG constraint library to sample non-conflicting constraints and append them to instructions. Constraints can be verified programmatically.
 
-```bash
-python create_constraint_data.py \
-    --input_dataset allenai/tulu-3-sft-mixture \
-    --output_path output_data.jsonl \
-    --num_samples 1000
-```
-
-### Full Options
+| Step | Script | Description |
+|------|--------|-------------|
+| Generate | `create_constraint_data.py` | Samples constraints and appends to instructions |
+| Verify | `verify_constraints.py` | Checks responses against constraint ground truth |
 
 ```bash
+# Generate constrained instructions
 python create_constraint_data.py \
     --input_dataset allenai/tulu-3-sft-mixture \
-    --output_path output_data.jsonl \
-    --num_samples 10000 \
+    --save_to_disk ./output_dataset \
+    --num_samples 1000 \
     --min_constraints 1 \
-    --max_constraints 5 \
-    --split train \
-    --seed 42 \
-    --streaming  # Use for large datasets
+    --max_constraints 5
+
+# Verify model responses
+python verify_constraints.py \
+    --input_file responses.jsonl \
+    --output_file verified.jsonl
 ```
 
-### Arguments
+### Approach 2: vLLM + Prompt-Based (LLM-Assisted)
+
+Uses a vLLM backend to generate constraints via prompts. Evaluation is done using LLM-based checklist matching.
+
+| Step | Script | Prompt | Description |
+|------|--------|--------|-------------|
+| Augment | `augment_instructions_vllm.py` | `prompt/constraint_augmentation.txt` | Add constraints to instructions |
+| Filter | `contradiction_check_vllm.py` | `prompt/contradiction_check.txt` | Label self-contradictory constraints |
+| Extract | `checklist_extraction_vllm.py` | `prompt/checklist_extraction.txt` | Generate evaluation checklists |
+| Evaluate | (use prompt directly) | `prompt/checklist_eval.txt` | Score responses against checklist |
+
+```bash
+# 1) Augment instructions with constraints
+python augment_instructions_vllm.py \
+    --input_dataset ./input_dataset \
+    --save_to_disk ./augmented_dataset \
+    --model "Qwen/Qwen3-30B-A3B-Instruct-2507" \
+    --base_url "http://localhost:8000/v1" \
+    --num_workers 64 --max_inflight 128
+
+# 2) Check for self-contradictory constraints
+python contradiction_check_vllm.py \
+    --input_dataset ./augmented_dataset \
+    --save_to_disk ./contradiction_labeled \
+    --model "Qwen/Qwen3-30B-A3B-Instruct-2507" \
+    --base_url "http://localhost:8000/v1"
+
+# 3) Extract evaluation checklists
+python checklist_extraction_vllm.py \
+    --input_dataset ./augmented_dataset \
+    --save_to_disk ./checklist_dataset \
+    --model "Qwen/Qwen3-30B-A3B-Instruct-2507" \
+    --base_url "http://localhost:8000/v1"
+```
+
+Shell scripts for cluster deployment are available in `scripts/`.
+
+---
+
+## Utility Scripts
+
+### Upload Dataset to Hugging Face Hub
+
+```bash
+python upload_dataset_to_hf.py \
+    --dataset_path ./my_dataset \
+    --repo_id username/dataset_name \
+    --private  # optional
+```
+
+### Deduplicate Instructions
+
+Merges multiple datasets and removes duplicate instructions, tracking which dataset each row came from.
+
+```bash
+python dedup_instructions.py \
+    --input_path ./dataset_a \
+    --input_path ./dataset_b \
+    --output_path ./deduped_dataset \
+    --instruction_field instruction \
+    --lower  # optional: case-insensitive dedup
+```
+
+---
+
+## Script Reference
+
+### `create_constraint_data.py`
 
 | Argument | Description | Default |
 |----------|-------------|---------|
-| `--input_dataset` | HuggingFace dataset name or path | Required |
-| `--output_path` | Path to save output JSONL | Required |
+| `--input_dataset` | HuggingFace dataset name or local path | Required |
+| `--output_path` | Path to save output JSONL | — |
+| `--save_to_disk` | Path to save as HF dataset | — |
 | `--num_samples` | Number of samples to process | All |
 | `--min_constraints` | Minimum constraints per example | 1 |
 | `--max_constraints` | Maximum constraints per example | 5 |
@@ -60,111 +119,167 @@ python create_constraint_data.py \
 | `--seed` | Random seed | 42 |
 | `--streaming` | Use streaming mode for large datasets | False |
 
+### `verify_constraints.py`
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--response` | Single response text to verify | — |
+| `--constraint_id` | Constraint ID to check | — |
+| `--kwargs` | JSON string of kwargs for constraint | `{}` |
+| `--input_file` | Input JSONL file with responses | — |
+| `--output_file` | Output JSONL file for results | — |
+| `--response_field` | Field name containing response | response |
+| `--list_constraints` | List all available constraint IDs | — |
+
+### `augment_instructions_vllm.py` / `contradiction_check_vllm.py` / `checklist_extraction_vllm.py`
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--input_dataset` | Dataset name, path, or JSON/JSONL file | Required |
+| `--save_to_disk` | Path to save HF dataset | Required |
+| `--push_to_hub` | Hub repo_id to push after saving | — |
+| `--model` | Model name served by vLLM | openai/gpt-oss-120b |
+| `--base_url` | Base URL for OpenAI-compatible API | http://localhost:8000/v1 |
+| `--cache_path` | Disk cache directory | ~/.cache |
+| `--system_prompt_path` | Path to system prompt file | (script-specific) |
+| `--user_prompt_path` | Path to user prompt template | (script-specific) |
+| `--instruction_field` | Field name for raw prompt | instruction |
+| `--split` | Dataset split | train |
+| `--streaming` | Streaming mode | False |
+| `--max_samples` | Max samples to process | All |
+| `--start_index` | Skip samples before this index | 0 |
+| `--num_workers` | Number of threads | 4 |
+| `--max_inflight` | Max in-flight requests | 32 |
+| `--no_system` | Merge system prompt into user message | False |
+
+### `upload_dataset_to_hf.py`
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--dataset_path` | Local dataset directory | Required |
+| `--repo_id` | Hub repo id (e.g. user/dataset) | Required |
+| `--private` | Create repo as private | False |
+| `--split` | Split name for DatasetDict | train |
+
+### `dedup_instructions.py`
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--input_path` | Dataset path (repeatable) | Required |
+| `--output_path` | Path to save deduplicated dataset | Required |
+| `--instruction_field` | Field to deduplicate by | instruction |
+| `--lower` | Lowercase before dedup | False |
+| `--no_strip` | Disable stripping whitespace | False |
+| `--no_collapse_ws` | Disable collapsing whitespace | False |
+| `--drop_empty` | Drop rows with empty instructions | False |
+
+---
+
 ## Output Format
 
-The output follows the format of `allenai/IF_multi_constraints_upto5`:
+### IFEvalG Output (from `create_constraint_data.py`)
 
 ```json
 {
     "key": "dataset_name_12345",
-    "messages": [
-        {
-            "role": "user",
-            "content": "Write a poem about nature. Your response should contain at least 3 sentences. Include keywords ['forest', 'river'] in the response."
-        }
-    ],
-    "ground_truth": "[{\"instruction_id\": [\"length_constraints:number_sentences\"], \"kwargs\": [{\"num_sentences\": 3, \"relation\": \"at least\"}]}, {\"instruction_id\": [\"keywords:existence\"], \"kwargs\": [{\"keywords\": [\"forest\", \"river\"]}]}]",
+    "messages": [{"role": "user", "content": "Write a poem about nature. Your response should contain at least 3 sentences."}],
+    "ground_truth": "[{\"instruction_id\": [\"length_constraints:number_sentences\"], \"kwargs\": [{\"num_sentences\": 3, \"relation\": \"at least\"}]}]",
     "dataset": "dataset_name",
-    "constraint_type": "multi",
-    "constraint": "Your response should contain at least 3 sentences. Include keywords ['forest', 'river'] in the response."
+    "constraint_type": "single",
+    "constraint": "Your response should contain at least 3 sentences."
 }
 ```
 
-## Available Constraints
+### vLLM Augmentation Output (from `augment_instructions_vllm.py`)
 
-The IFEvalG library provides 50+ constraint types across categories:
+```json
+{
+    "key": "dataset_name_12345",
+    "raw_prompt": "Write a poem about nature.",
+    "augmented_prompt": "Write a poem about nature. Use exactly 4 stanzas. Each stanza must end with a question.",
+    "messages": [{"role": "user", "content": "..."}],
+    "dataset": "dataset_name",
+    "model": "Qwen/Qwen3-30B-A3B-Instruct-2507"
+}
+```
 
-### Keywords
-- `keywords:existence` - Include specific keywords
-- `keywords:forbidden_words` - Exclude specific keywords
-- `keywords:word_once` - Include keyword exactly once
-- `keywords:frequency` - Keyword appears N times
-- `keywords:palindrome` - Include a palindrome
+---
 
-### Length Constraints
-- `length_constraints:number_sentences` - Sentence count requirement
-- `length_constraints:number_paragraphs` - Paragraph count requirement
-- `length_constraints:number_words` - Word count requirement
+## Available IFEvalG Constraints
 
-### Format
-- `detectable_format:json_format` - Output in JSON
-- `detectable_format:title` - Include a title in `<<>>`
-- `detectable_format:number_bullet_lists` - Use bullet points
-- `detectable_format:number_highlighted_sections` - Use markdown highlights
+The IFEvalG library provides 50+ constraint types:
 
-### Case/Language
-- `change_case:english_capital` - All uppercase
-- `change_case:english_lowercase` - All lowercase
-- `language:response_language` - Respond in specific language
+| Category | Examples |
+|----------|----------|
+| Keywords | `keywords:existence`, `keywords:forbidden_words`, `keywords:frequency` |
+| Length | `length_constraints:number_sentences`, `number_paragraphs`, `number_words` |
+| Format | `detectable_format:json_format`, `title`, `number_bullet_lists` |
+| Case | `change_case:english_capital`, `english_lowercase` |
+| Language | `language:response_language` |
+| Position | `first_word:first_word_answer`, `last_word:last_word_answer` |
+| Punctuation | `punctuation:no_comma`, `punctuation_dot` |
+| Content | `detectable_content:postscript`, `startend:quotation` |
 
-### Position
-- `first_word:first_word_answer` - Start with specific word
-- `last_word:last_word_answer` - End with specific word
-- `startend:end_checker` - End with specific phrase
+Run `python verify_constraints.py --list_constraints` to see all available IDs.
 
-### Punctuation
-- `punctuation:no_comma` - No commas allowed
-- `punctuation:punctuation_dot` - No periods allowed
+---
 
-### Content
-- `detectable_content:postscript` - Add a P.S.
-- `startend:quotation` - Wrap in quotation marks
-
-## Constraint Conflict Handling
-
-The script automatically handles constraint conflicts. For example:
-- `english_capital` and `english_lowercase` conflict
-- `json_format` conflicts with most other format constraints
-- Paragraph constraints conflict with each other
-
-## Verification
-
-Each constraint class includes a `check_following(response)` method that returns `True` if the response satisfies the constraint:
+## Programmatic Verification
 
 ```python
 from IFEvalG import instructions_registry
 
-# Get a constraint checker
 checker_class = instructions_registry.get_instruction_class("keywords:existence")
 checker = checker_class("keywords:existence")
 checker.build_description(keywords=["hello", "world"])
 
-# Check if a response follows the constraint
 response = "Hello world, this is a test."
 is_following = checker.check_following(response)  # True
 ```
+
+---
 
 ## Project Structure
 
 ```
 .
-├── IFEvalG/
+├── IFEvalG/                         # Constraint library
 │   ├── __init__.py
-│   ├── instructions.py          # Constraint checker classes
-│   ├── instructions_registry.py # Constraint registry and conflicts
-│   └── instructions_util.py     # Utility functions
-├── create_constraint_data.py    # Main data creation script
+│   ├── instructions.py              # Constraint checker classes
+│   ├── instructions_registry.py     # Constraint registry and conflicts
+│   └── instructions_util.py         # Utility functions
+├── prompt/                          # LLM prompts for vLLM pipeline
+│   ├── constraint_augmentation.txt
+│   ├── constraint_augmentation_user.txt
+│   ├── contradiction_check.txt
+│   ├── constradiction_check_user.txt
+│   ├── checklist_extraction.txt
+│   ├── checklist_extraction_user.txt
+│   ├── checklist_eval.txt
+│   └── checklist_eval_user.txt
+├── scripts/                         # Cluster deployment scripts
+│   ├── augment_instruction.sh
+│   ├── contradiction_check.sh
+│   └── checklist_extraction.sh
+├── create_constraint_data.py        # IFEvalG constraint generation
+├── verify_constraints.py            # IFEvalG constraint verification
+├── augment_instructions_vllm.py     # vLLM constraint augmentation
+├── contradiction_check_vllm.py      # vLLM contradiction detection
+├── checklist_extraction_vllm.py     # vLLM checklist extraction
+├── upload_dataset_to_hf.py          # Upload datasets to Hub
+├── dedup_instructions.py            # Deduplicate instructions
+├── chat.py                          # OpenAI-compatible chat client
 ├── requirements.txt
 └── README.md
 ```
+
+---
 
 ## License
 
 Apache License 2.0 (same as the original IFEvalG code from Google Research)
 
 ## Citation
-
-If you use this code, please cite:
 
 ```bibtex
 @misc{pyatkin2025generalizing,
