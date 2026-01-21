@@ -1,0 +1,13 @@
+*.log
+
+.vscode/
+
+.claude/
+
+.codex/
+
+__pycache__/
+
+magpie_creative*/
+
+

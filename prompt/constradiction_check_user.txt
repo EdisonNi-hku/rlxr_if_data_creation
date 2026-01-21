@@ -1,0 +1,2 @@
+[Now analyze the following prompt:]
+{target_prompt}

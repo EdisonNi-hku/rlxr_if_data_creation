@@ -1,0 +1,5 @@
+[User Instruction]: {user_instruction}
+[Model Answer]: {model_answer}
+[CheckList]: {checklist}
+
+[Your Evaluation]:
