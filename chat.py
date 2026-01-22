@@ -75,6 +75,9 @@ class LocalChat:
             else:
                 reasoning_content = getattr(chat.choices[0].message, "reasoning_content", "")
                 reply = chat.choices[0].message.content
+                if '</think>' in reply:
+                    reply = reply.split('</think>')[1].strip()
+                    reasoning_content = reply.split('</think>')[0].strip()
 
             with self._lock:
                 self.cache[(self.model, cache_key)] = (reply, reasoning_content)

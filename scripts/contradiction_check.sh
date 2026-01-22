@@ -1,28 +1,33 @@
 #!/bin/bash -l
 
-ANNOTATOR_MODEL="Qwen3-32B"
-FULL_ANNOTATOR_MODEL="./models/Qwen3-32B"
+echo $PRIMUS_OUTPUT_DIR
+OSS_SAVE_PATH="/primus_datasets/jingwei"
+
+FULL_ANNOTATOR_MODEL="./models/Qwen3-235B-A22B-Thinking-2507-FP8"
 ROOT="/root/code"
 
-VLLM_LOG="$ROOT/vllm_qwen3_32b.log"
-CACHE_DIR="$ROOT/vllm_cache"
+VLLM_LOG="$ROOT/vllm_qwen3_235b.log"
 TIMEOUT=600
 DEBUG=0
-N_THREADS=128
-MAX_INFLIGHT=256
+N_THREADS=64
+MAX_INFLIGHT=128
 REPO_NAME="magpie_creative_dedup_verifiable_if_filtered"
+CACHE_DIR="$ROOT/vllm_cache_qwen3_235b_$REPO_NAME"
+OUTPUT_DIR="$PRIMUS_OUTPUT_DIR/$REPO_NAME"
 VLLM_BASE_URL="http://localhost:8000/v1"
 GPU_NUM=8
 SYSTEM_PROMPT_PATH="$ROOT/prompt/contradiction_check.txt"
 USER_PROMPT_PATH="$ROOT/prompt/constradiction_check_user.txt"
 SPLIT="train"
-CACHE_PATH="$ROOT/.cache"
+_RAW_GENERATION_CONFIG='{"temperature": 0.6, "top_p": 0.95, "extra_body": {"enable_thinking": true, "top_k": 20}}'
+GENERATION_CONFIG_ESCAPED=$(printf '%q' "$_RAW_GENERATION_CONFIG")
+GPU_MEM_UTILIZATION=0.7
 
 
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 huggingface-cli login --token $HUGGINGFACE_TOKEN
 
-VLLM_CMD="vllm serve $FULL_ANNOTATOR_MODEL --tensor-parallel-size $GPU_NUM"
+VLLM_CMD="vllm serve $FULL_ANNOTATOR_MODEL --tensor-parallel-size $GPU_NUM --enable-expert-parallel --gpu_memory_utilization $GPU_MEM_UTILIZATION"
 
 GENERATION_CMD="
 INPUT_DATASET_LIST=(
@@ -30,7 +35,7 @@ INPUT_DATASET_LIST=(
 )
 
 OUTPUT_DATASET_LIST=(
-    \"$ROOT/$REPO_NAME\"
+    \"$OUTPUT_DIR\"
 )
 
 for i in \${!INPUT_DATASET_LIST[@]}; do
@@ -46,7 +51,7 @@ for i in \${!INPUT_DATASET_LIST[@]}; do
      --system_prompt_path $SYSTEM_PROMPT_PATH \
      --user_prompt_path $USER_PROMPT_PATH \
      --split $SPLIT \
-     --cache_path $CACHE_PATH
+     --generation_config $GENERATION_CONFIG_ESCAPED
 
 done
 "
@@ -76,6 +81,10 @@ bash -lc "
   echo \"[RUN] Launching contradiction check...\"
   
   $GENERATION_CMD
+
+  cp -r $CACHE_DIR $PRIMUS_OUTPUT_DIR
+  cp -r $OUTPUT_DIR $OSS_SAVE_PATH
+  cp -r $CACHE_DIR $PRIMUS_OUTPUT_DIR
   
   kill -TERM \$VLLM_PID 2>/dev/null || true
   wait \$VLLM_PID 2>/dev/null || true
