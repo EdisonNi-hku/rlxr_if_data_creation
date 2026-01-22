@@ -4,7 +4,7 @@
 echo $PRIMUS_OUTPUT_DIR
 OSS_SAVE_PATH="/primus_datasets/jingwei"
 
-FULL_ANNOTATOR_MODEL="./models/Qwen3-235B-A22B-Thinking-2507-FP8"
+FULL_ANNOTATOR_MODEL="./models/Qwen3-235B-A22B-Instruct-2507-FP8"
 ROOT="/root/code"
 
 VLLM_LOG="$ROOT/vllm_qwen3_235b.log"
