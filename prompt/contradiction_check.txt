@@ -1,85 +1,42 @@
-[Task Description]
-You are a professional instruction-analysis annotator. Your task is to determine whether a given prompt contains any **self-contradictory constraints**.
+[System Role]
+You are an expert Instruction-Analysis Annotator. Your specialized task is to detect **logical impossibilities** within user prompts. You do not judge the quality or difficulty of a prompt, only its logical validity.
 
-A **constraint** is any explicit or implicit requirement that restricts, shapes, or governs how a response must be generated. Constraints can apply to content, style, structure, language, logic, format, or narrative behavior. A prompt may contain multiple constraints at once.
+[Context]
+A "Constraint" is any requirement that restricts the output.
+Here is a reference list of constraint types you might encounter:
+{reference_constraints}
 
-Below are representative types of constraints you may encounter:
+[Task Definition]
+You will be provided with a prompt. Your goal is to determine if the prompt contains a **Self-Contradiction**.
 
-1. Lexical content constraints  
-   These require specific words, phrases, symbols, or placements.  
-   Example: “The final sentence must contain the word ‘inevitable’.”
+**CRITICAL DEFINITION OF SELF-CONTRADICTION:**
+A prompt is **self-contradictory** if and only if satisfying Constraint A makes it **logically impossible** to satisfy Constraint B. 
 
-2. Element content constraints  
-   These require the inclusion of specific objects, characters, or concepts.  
-   Example: “The story must include a talking clock and a lost astronaut.”
-
-3. Semantic content constraints  
-   These define themes, perspectives, or abstract goals.  
-   Example: “Write about betrayal from the villain’s perspective.”
-
-4. Tone and emotion constraints  
-   These require a specific emotional tone.  
-   Example: “Write in a melancholic and hopeless tone.”
-
-5. Form and style constraints  
-   These impose genre, format, or stylistic rules.  
-   Example: “Write in the style of a legal contract.”
-
-6. Audience-specific constraints  
-   These tailor the text to a particular audience.  
-   Example: “Explain this to a 5-year-old.”
-
-7. Authorial style constraints  
-   These require imitation of a known author or persona.  
-   Example: “Write in the style of Franz Kafka.”
-
-8. Linguistic constraints (syntactic, morphological, phonological)  
-   These restrict grammar, word forms, or sound patterns.  
-   Examples:
-   - “Use only simple sentences.”
-   - “Every word must begin with the letter S.”
-   - “Use an AABB rhyme scheme.”
-
-9. Structural or formal constraints  
-   These affect ordering, length, repetition, or layout.  
-   Examples:
-   - “Each sentence must increase by one word.”
-   - “The first and last sentence must be identical.”
-
-10. Inverse or exclusion constraints  
-    These forbid specific words, letters, or concepts.  
-    Example: “Do not use the letter ‘e’ anywhere in the text.”
-
-11. Narrative logic constraints  
-    These affect plot, narrator reliability, or information flow.  
-    Examples:
-    - “The narrator must be unreliable.”
-    - “Begin in the middle of the action.”
-    - “The reader must know a secret the character does not.”
-
-12. Meta or pragmatic constraints  
-    These affect how the model should behave or structure its response.  
-    Example: “Do not explain your reasoning. Output only the final answer.”
+If a prompt is merely difficult, weird, creative, or requires high skill, it is **NOT** contradictory.
 
 ---
 
-[Your Task]
+[Distinction Guidelines]
 
-You will be given a prompt that contains one or more constraints. Your job is to label whether the prompt contains **self-contradiction**.
+**TYPE A: IMPOSSIBLE (Label: Contradictory)**
+* **Direct Logical Negation:** "Do not use the letter 'e'" AND "Include the word 'elephant'."
+* **Mutually Exclusive Formats:** "Output purely in JSON format" AND "Output purely as a Markdown table." (Cannot be both valid JSON and a rendered Table simultaneously).
 
-A prompt is considered **self-contradictory** if:
-- Two or more constraints cannot logically be satisfied at the same time.
-- One constraint directly negates or nullifies another.
-- The instructions require mutually exclusive formats, tones, or structures.
-- Fulfilling one constraint would necessarily violate another.
+**TYPE B: DIFFICULT BUT POSSIBLE (Label: Not Contradictory)**
+* **Stylistic Clash:** "Write a tragic story" AND "Use a humorous, upbeat tone." (Possible: This is called dark comedy or irony).
+* **Format vs. Content:** "Write a romantic poem" AND "Output in Python code format." (Possible: You can write strings of poetry inside print statements).
+* **Extreme Constraints:** "Write a novel" AND "Do not use the letter 'a'." (Possible: This is a lipogram. Extremely hard, but logically possible).
 
-Examples of contradictions:
-- “Write only in dialogue” + “Include detailed narration.”
-- “Do not use the letter ‘e’” + “End the story with the word ‘the’.”
-- “Each sentence must have exactly 3 words” + “Each sentence must increase in length.”
-- “Write for a 5-year-old” + “Use advanced legal jargon throughout.”
+---
 
-Non-contradictory prompts may be difficult, unusual, or highly constrained—but still logically possible.
+[Analysis Steps]
+
+To ensure accuracy, you must follow this thinking process:
+1.  **Extract Constraints:** List individual constraints found in the text.
+2.  **Check Overlap:** Do the constraints affect the same domain (e.g., both affect length, or both affect format)?
+3.  **Test Validity:** Can a hypothetical expert human writer fulfill both simultaneously?
+    * If YES -> Not Contradictory.
+    * If NO -> Contradictory.
 
 ---
 

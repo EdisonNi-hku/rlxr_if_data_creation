@@ -322,6 +322,7 @@ def process_dataset(
     input_dataset: str,
     output_path: str | None = None,
     save_to_disk_path: str | None = None,
+    push_to_hub: str | None = None,
     num_samples: int | None = None,
     min_constraints: int = 1,
     max_constraints: int = 5,
@@ -334,6 +335,8 @@ def process_dataset(
     Args:
         input_dataset: HuggingFace dataset name or path.
         output_path: Path to save the output JSONL file.
+        save_to_disk_path: Path to save as HuggingFace dataset locally.
+        push_to_hub: HuggingFace Hub repo name to push the dataset to.
         num_samples: Number of samples to process (None for all).
         min_constraints: Minimum number of constraints per example.
         max_constraints: Maximum number of constraints per example.
@@ -406,13 +409,18 @@ def process_dataset(
         hf_dataset = Dataset.from_list(results)
         hf_dataset.save_to_disk(save_to_disk_path)
         print(f"Dataset saved! Use `load_from_disk('{save_to_disk_path}')` to load.")
-    elif output_path:
+    if push_to_hub:
+        print(f"Pushing dataset to HuggingFace Hub: {push_to_hub}")
+        hf_dataset = Dataset.from_list(results)
+        hf_dataset.push_to_hub(push_to_hub)
+        print(f"Dataset pushed to: https://huggingface.co/datasets/{push_to_hub}")
+    if output_path:
         print(f"Saving as JSONL to: {output_path}")
         with open(output_path, "w", encoding="utf-8") as f:
             for example in results:
                 f.write(json.dumps(example, ensure_ascii=False) + "\n")
         print(f"Output saved to: {output_path}")
-    else:
+    if not save_to_disk_path and not push_to_hub and not output_path:
         print("No output path specified, results not saved.")
 
 
@@ -436,7 +444,13 @@ def main():
         "--save_to_disk",
         type=str,
         default=None,
-        help="Path to save as HuggingFace dataset (for push_to_hub)",
+        help="Path to save as HuggingFace dataset locally",
+    )
+    parser.add_argument(
+        "--push_to_hub",
+        type=str,
+        default=None,
+        help="HuggingFace Hub repo name to push the dataset to (e.g., username/dataset-name)",
     )
     parser.add_argument(
         "--num_samples",
@@ -476,13 +490,14 @@ def main():
 
     args = parser.parse_args()
 
-    if not args.output_path and not args.save_to_disk:
-        parser.error("Either --output_path or --save_to_disk must be specified")
+    if not args.output_path and not args.save_to_disk and not args.push_to_hub:
+        parser.error("At least one of --output_path, --save_to_disk, or --push_to_hub must be specified")
 
     process_dataset(
         input_dataset=args.input_dataset,
         output_path=args.output_path,
         save_to_disk_path=args.save_to_disk,
+        push_to_hub=args.push_to_hub,
         num_samples=args.num_samples,
         min_constraints=args.min_constraints,
         max_constraints=args.max_constraints,

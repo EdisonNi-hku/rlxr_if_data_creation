@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import os
 
-from datasets import load_from_disk
+from datasets import Dataset, DatasetDict, load_from_disk
 
 
 def main() -> None:
@@ -31,7 +31,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--split",
-        default="train",
+        default=None,
         help="Split name when the saved dataset is a DatasetDict.",
     )
     args = parser.parse_args()
@@ -40,13 +40,19 @@ def main() -> None:
         raise FileNotFoundError(f"Dataset directory not found: {args.dataset_path}")
 
     dataset = load_from_disk(args.dataset_path)
-    if args.split is not None:
-        if args.split not in dataset:
-            raise ValueError(
-                f"Split '{args.split}' not found. Available: {list(dataset.keys())}"
-            )
-        dataset_to_push = dataset[args.split]
+
+    # Handle Dataset vs DatasetDict
+    if isinstance(dataset, DatasetDict):
+        if args.split is not None:
+            if args.split not in dataset:
+                raise ValueError(
+                    f"Split '{args.split}' not found. Available: {list(dataset.keys())}"
+                )
+            dataset_to_push = dataset[args.split]
+        else:
+            dataset_to_push = dataset
     else:
+        # It's a plain Dataset
         dataset_to_push = dataset
 
     dataset_to_push.push_to_hub(args.repo_id, private=args.private)

@@ -161,6 +161,11 @@ def main() -> None:
         help="Path to the user prompt template file.",
     )
     parser.add_argument(
+        "--reference_constraints_path",
+        default="prompt/reference_constraints_v2.txt",
+        help="Path to the reference constraints file.",
+    )
+    parser.add_argument(
         "--instruction_field",
         default="instruction",
         help="Primary field name for the raw prompt.",
@@ -216,6 +221,8 @@ def main() -> None:
     args = parser.parse_args()
 
     system_prompt = load_prompt(args.system_prompt_path)
+    reference_constraints = load_prompt(args.reference_constraints_path)
+    system_prompt = system_prompt.replace("{reference_constraints}", reference_constraints)
     user_prompt_template = load_prompt(args.user_prompt_path)
     if "{target_prompt}" not in user_prompt_template:
         raise ValueError("User prompt template must contain {target_prompt}.")
@@ -316,6 +323,10 @@ def main() -> None:
 
     pbar.close()
     results = [results_map[idx] for idx in sorted(results_map)]
+
+    if not results:
+        print("No samples processed. Nothing to save.")
+        return
 
     dataset_out = Dataset.from_list(results)
     dataset_out.save_to_disk(args.save_to_disk)

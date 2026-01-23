@@ -8,41 +8,7 @@ You should use the [Constraint System] below as a *reference framework* for iden
 Your output should be as detailed as possible. Use numerical numbering and "\n" to list all points in the checklist.
 
 # Constraint System
-1. Lexical content constraint: Mandatory use of specific terms or symbols, including their inclusion and precise placement. Example: *...must include the word "[Specific Word]" in the final sentence.*
-2. Element content constraint: Mandates for including specific elements or concepts in responses, reflecting a scenario or object. Example: *...the story must feature a [Specific Object/Character].*
-3. Semantic content constraint: Directives on thematic content, perspective, or tone, emphasizing response significance. Example: *Write a story about the concept of [Abstract Theme, e.g., Betrayal].*
-4. Tone and emotion stylistic constraint: The emotional tone must adhere to standards such as seriousness, anger, joy, humor, and politeness. Example: *Write the passage in a [Specific Emotion, e.g., Melancholic] tone.*
-5. Form and style stylistic constraint: Text expression standards ensure alignment with specific stylistic criteria in both presentation and perception. Example: *Write a passage in the style of [Specific Genre, e.g., Film Noir].*
-6. Audience-specific stylistic constraint: Text should be tailored to specific audiences, ensuring clarity and relevance for specialized groups. Example: *Explain this narrative to a [Specific Audience, e.g., 5-year-old].*
-7. Authorial style stylistic constraint: Texts should emulate the styles of known authors to achieve artistic effects or depth. Example: *Write a passage in the style of [Famous Author].*
-8. Pragmatic linguistic constraint: Contextual language study, encompassing speech acts, implicature, discourse, dialects, sociolects, and language policy. Example: *The dialogue must use [Specific Dialect/Slang] appropriate for the setting.*
-9. Syntactic linguistic constraint: Sentence structure, including phrases, constituents, subordinate clauses, and imperatives. Example: *Write using only [Specific Sentence Structure, e.g., simple sentences].*
-10. Morphological linguistic constraint: The internal structure and formation rules of words, including roots, affixes, and morphological changes. Example: *Use words that contain the prefix "[Prefix]" whenever possible.*
-11. Phonological linguistic constraint: Study on phonological structures: phonemes, allophones, pitch, duration, and intensity. Example: *The text must follow an AABB rhyme scheme.*
-12. Role-based situation constraint: Simulating characters based on context, emulating their traits, language, and behaviors. Example: *You are [Character Persona]; write your response from this perspective.*
-13. Inverse constraint: Narrow the response space through inverse constraints and indirect exclusion. Example: *Describe [Object] without using the words [Forbidden Word 1] or [Forbidden Word 2].*
-14. Alphabetical sequence constraint: Sentences must begin with sequential letters of the alphabet (A-Z). Example: *The first sentence must start with 'A', the second with 'B', and so on.*
-15. Monosyllabic constraint: The text must be composed entirely of words with a single syllable. Example: *Write a response using only one-syllable words.*
-16. Lipogram constraint: A specific, usually common letter is strictly forbidden from appearing anywhere in the text. Example: *Write a response without using the letter "[Letter]".*
-17. Anadiplosis constraint: The last word of a sentence must be the exact first word of the following sentence. Example: *Ensure the last word of every sentence matches the first word of the next sentence.*
-18. Incremental sentence constraint: The word count of each sentence must increase by exactly one word sequentially (1, 2, 3...). Example: *Sentence 1 must have 1 word, Sentence 2 must have 2 words, etc.*
-19. Circular narrative constraint: The very first sentence and the very last sentence of the text must be identical. Example: *Start and end the text with the exact phrase: "[Specific Phrase]."*
-20. Uniform punctuation constraint: Every sentence in the text must end with the same specific punctuation mark. Example: *Every sentence must end with a [Punctuation Mark].*
-21. Lexical length constraint: All words used in the text must be under or exactly at a specific character limit. Example: *Do not use any words longer than [Number] letters.*
-22. Dialogue-only constraint: The text must rely exclusively on spoken dialogue, with absolutely no narration or speech tags. Example: *Write the scene using only dialogue lines, with no descriptive text.*
-23. Acrostic constraint: The first letter of each sentence must spell out a specific hidden word or message vertically. Example: *The first letters of the sentences must spell the word "[Hidden Word]".*
-24. Tautogram constraint: All words in the text must start with the same letter. Example: *Every word in the response must start with the letter "[Letter]".*
-25. Univocalic constraint: The text must use only one specific vowel type throughout, excluding all others. Example: *Write using only the vowel "[Vowel]" (e.g., 'e') and no others.*
-26. Unreliable Narrator constraint: The narrator must clearly display bias, ignorance, or deceit, contradicting themselves or known facts. Example: *Write from the perspective of a narrator who is clearly lying about [Event].*
-27. In Media Res constraint: The narrative must begin immediately in the middle of intense action, with no opening exposition. Example: *Start the story in the middle of [Action Sequence] without explaining the context.*
-28. Genre Mashup constraint: The story must combine specific tropes from two traditionally clashing genres. Example: *Combine elements of [Genre A] and [Genre B] in a single scene.*
-29. Dramatic Irony constraint: The text must establish a scenario where the reader clearly knows a critical fact that the character does not. Example: *Write a scene where the reader knows [Specific Fact], but the character acts as if they do not.*
-30. Extended Metaphor constraint: A single specific metaphor must be introduced early and used consistently to describe the subject throughout. Example: *Describe [Topic A] using only metaphors and terminology related to [Topic B].*
-31. Chekhov’s Gun constraint: A specific, seemingly insignificant object mentioned at the start must be the essential tool for resolution at the end. Example: *Introduce [Small Object] in the first sentence and use it to resolve the conflict in the final sentence.*
-32. Synesthetic Imagery constraint: Descriptions must intentionally cross sensory domains, describing one sense using the vocabulary of another. Example: *Describe the sound of [Sound Source] using words usually reserved for [Different Sense, e.g., Taste].*
-33. Stream of Consciousness constraint: The narrative flow must mimic raw thought processes, characterized by loose associations and run-on sentences. Example: *Write the internal monologue of the character using a stream-of-consciousness style.*
-34. Narrative Arc reversal constraint: The emotional tone of the story must strictly travel from one extreme to its opposite. Example: *Start the narrative with a feeling of [Emotion A] and end it with a feeling of [Emotion B].*
-35. Breaking the Fourth Wall constraint: The narrator must explicitly address the reader or acknowledge that they are in a story. Example: *The narrator must speak directly to the reader about [Topic].*
+{reference_constraints}
 
 # Given Example
 

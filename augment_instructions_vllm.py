@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
@@ -18,6 +20,33 @@ from chat import GENERATION_CONFIGS, LocalChat
 def load_prompt(path: str) -> str:
     with open(path, "r", encoding="utf-8") as f:
         return f.read().strip()
+
+
+def load_reference_constraints(path: str) -> list[str]:
+    """Load reference constraints as a list of individual constraints."""
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read().strip()
+    # Split by numbered lines (e.g., "1. ...", "2. ...")
+    constraints = re.split(r'\n(?=\d+\.)', content)
+    return [c.strip() for c in constraints if c.strip()]
+
+
+def sample_constraints(constraints: list[str], n: int | None, seed: int | None = None) -> str:
+    """Sample n constraints from the list, or return all if n is None."""
+    if n is None or n >= len(constraints):
+        return "\n".join(constraints)
+    if seed is not None:
+        rng = random.Random(seed)
+        sampled = rng.sample(constraints, n)
+    else:
+        sampled = random.sample(constraints, n)
+    # Re-number the sampled constraints
+    renumbered = []
+    for i, constraint in enumerate(sampled, 1):
+        # Remove original numbering and add new
+        text = re.sub(r'^\d+\.\s*', '', constraint)
+        renumbered.append(f"{i}. {text}")
+    return "\n".join(renumbered)
 
 
 def build_dataset(
@@ -135,6 +164,29 @@ def main() -> None:
         help="Path to the user prompt template file.",
     )
     parser.add_argument(
+        "--reference_constraints_path",
+        default="prompt/reference_constraints_v2.txt",
+        help="Path to the reference constraints file.",
+    )
+    parser.add_argument(
+        "--num_constraints",
+        type=int,
+        default=None,
+        help="Number of reference constraints to randomly sample (default: use all).",
+    )
+    parser.add_argument(
+        "--lower_bound",
+        type=int,
+        default=1,
+        help="Lower bound for number of constraints to add (default: 1).",
+    )
+    parser.add_argument(
+        "--upper_bound",
+        type=int,
+        default=3,
+        help="Upper bound for number of constraints to add (default: 3).",
+    )
+    parser.add_argument(
         "--instruction_field",
         default="instruction",
         help="Primary field name for the raw prompt.",
@@ -160,6 +212,12 @@ def main() -> None:
         type=int,
         default=0,
         help="Skip samples before this index.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for constraint sampling reproducibility.",
     )
     parser.add_argument(
         "--generation_config",
@@ -191,7 +249,8 @@ def main() -> None:
     if not args.output_path and not args.save_to_disk:
         parser.error("Either --output_path or --save_to_disk must be specified.")
 
-    system_prompt = load_prompt(args.system_prompt_path)
+    system_prompt_template = load_prompt(args.system_prompt_path)
+    all_constraints = load_reference_constraints(args.reference_constraints_path)
     user_prompt_template = load_prompt(args.user_prompt_path)
     if "{raw_prompt}" not in user_prompt_template:
         raise ValueError("User prompt template must contain {raw_prompt}.")
@@ -227,6 +286,23 @@ def main() -> None:
         )
         if not raw_prompt:
             return None
+        
+        # Sample constraints for this example (use index as seed for reproducibility)
+        sampled_constraints = sample_constraints(
+            all_constraints,
+            args.num_constraints,
+            seed=args.seed + index if args.seed is not None else None,
+        )
+        
+        # Format system prompt with all placeholders
+        system_prompt = system_prompt_template.replace(
+            "{reference_constraints}", sampled_constraints
+        ).replace(
+            "{lower_bound}", str(args.lower_bound)
+        ).replace(
+            "{upper_bound}", str(args.upper_bound)
+        )
+        
         user_prompt = build_user_prompt(user_prompt_template, raw_prompt)
         if args.no_system:
             messages = [{"role": "user", "content": f"{system_prompt}\n{user_prompt}"}]
@@ -291,6 +367,10 @@ def main() -> None:
 
     pbar.close()
     results = [results_map[idx] for idx in sorted(results_map)]
+
+    if not results:
+        print("No samples processed. Nothing to save.")
+        return
 
     if args.save_to_disk:
         dataset_out = Dataset.from_list(results)
