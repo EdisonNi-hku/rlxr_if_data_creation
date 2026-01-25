@@ -22,7 +22,14 @@ Usage:
 import argparse
 import sys
 
-from chat import LocalChat, GENERATION_CONFIGS
+from chat import LocalChat
+
+
+GEN_CONFIG = {
+        "temperature": 0.6,
+        "top_p": 0.95,
+        "extra_body": {"enable_thinking": True, "top_k": 20},
+    }
 
 
 def build_messages(system_prompt: str | None, user_prompt: str) -> list[dict]:
@@ -170,12 +177,8 @@ def main():
     else:
         cache_path = os.path.expanduser("~/.cache")
 
-    # Get generation config
-    if args.model in GENERATION_CONFIGS:
-        gen_config = GENERATION_CONFIGS[args.model]
-    else:
-        gen_config = {}
-        print(f"Warning: No generation config for model '{args.model}', using defaults")
+    # Hardcoded generation config (overrides GENERATION_CONFIGS)
+    gen_config = GEN_CONFIG
 
     # Initialize chat client
     chat = LocalChat(
