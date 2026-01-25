@@ -207,8 +207,8 @@ start_vllm
 wait_for_vllm
 
 # Run pipeline
-# run_augmentation
-# run_contradiction_check
+run_augmentation
+run_contradiction_check
 run_checklist_extraction
 
 # Copy results
