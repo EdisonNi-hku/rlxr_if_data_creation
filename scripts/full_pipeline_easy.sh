@@ -60,7 +60,7 @@ FILTER_REF_CONSTRAINTS="$ROOT/prompt/reference_constraints_v2.txt"
 CHECKLIST_REPO_NAME="magpie_creative_easy_dedup_checklist_${SPLIT}_${VERSION}"
 CHECKLIST_CACHE_DIR="$ROOT/vllm_cache_qwen3_235b_$CHECKLIST_REPO_NAME"
 CHECKLIST_OUTPUT_DIR="$PRIMUS_OUTPUT_DIR/$CHECKLIST_REPO_NAME"
-CHECKLIST_SYSTEM_PROMPT="$ROOT/prompt/checklist_extraction.txt"
+CHECKLIST_SYSTEM_PROMPT="$ROOT/prompt/checklist_extraction_v1.txt"
 CHECKLIST_USER_PROMPT="$ROOT/prompt/checklist_extraction_user.txt"
 CHECKLIST_REF_CONSTRAINTS="$ROOT/prompt/reference_constraints_v2.txt"
 
@@ -207,8 +207,8 @@ start_vllm
 wait_for_vllm
 
 # Run pipeline
-run_augmentation
-run_contradiction_check
+# run_augmentation
+# run_contradiction_check
 run_checklist_extraction
 
 # Copy results

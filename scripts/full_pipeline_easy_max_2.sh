@@ -36,20 +36,22 @@ SPLIT="train"
 GENERATION_CONFIG='{"temperature": 0.6, "top_p": 0.95, "extra_body": {"enable_thinking": true, "top_k": 20}}'
 
 # Input dataset and args
-INPUT_DATASET="JingweiNi/magpie_creative_dedup"
-NUM_CONSTRAINTS=15
-VERSION="v1"
+INPUT_DATASET="JingweiNi/magpie_creative_easy_dedup"
+NUM_CONSTRAINTS=10
+VERSION="max2_v1"
 
 # Step 1: Augmentation
-AUGMENT_REPO_NAME="magpie_creative_dedup_augmented_${SPLIT}_${VERSION}"
+AUGMENT_REPO_NAME="magpie_creative_easy_dedup_augmented_${SPLIT}_${VERSION}"
 AUGMENT_CACHE_DIR="$ROOT/vllm_cache_qwen3_235b_$AUGMENT_REPO_NAME"
 AUGMENT_OUTPUT_DIR="$PRIMUS_OUTPUT_DIR/$AUGMENT_REPO_NAME"
 AUGMENT_SYSTEM_PROMPT="$ROOT/prompt/constraint_augmentation.txt"
 AUGMENT_USER_PROMPT="$ROOT/prompt/constraint_augmentation_user.txt"
 AUGMENT_REF_CONSTRAINTS="$ROOT/prompt/reference_constraints_v2.txt"
+AUGMENT_LOWER_BOUND=1
+AUGMENT_UPPER_BOUND=2
 
 # Step 2: Contradiction Check
-FILTER_REPO_NAME="magpie_creative_dedup_filtered_${SPLIT}_${VERSION}"
+FILTER_REPO_NAME="magpie_creative_easy_dedup_filtered_${SPLIT}_${VERSION}"
 FILTER_CACHE_DIR="$ROOT/vllm_cache_qwen3_235b_$FILTER_REPO_NAME"
 FILTER_OUTPUT_DIR="$PRIMUS_OUTPUT_DIR/$FILTER_REPO_NAME"
 FILTER_SYSTEM_PROMPT="$ROOT/prompt/contradiction_check.txt"
@@ -57,7 +59,7 @@ FILTER_USER_PROMPT="$ROOT/prompt/constradiction_check_user.txt"
 FILTER_REF_CONSTRAINTS="$ROOT/prompt/reference_constraints_v2.txt"
 
 # Step 3: Checklist Extraction
-CHECKLIST_REPO_NAME="magpie_creative_dedup_checklist_${SPLIT}_${VERSION}"
+CHECKLIST_REPO_NAME="magpie_creative_easy_dedup_checklist_${SPLIT}_${VERSION}"
 CHECKLIST_CACHE_DIR="$ROOT/vllm_cache_qwen3_235b_$CHECKLIST_REPO_NAME"
 CHECKLIST_OUTPUT_DIR="$PRIMUS_OUTPUT_DIR/$CHECKLIST_REPO_NAME"
 CHECKLIST_SYSTEM_PROMPT="$ROOT/prompt/checklist_extraction_v1.txt"
@@ -119,7 +121,9 @@ run_augmentation() {
         --reference_constraints_path "$AUGMENT_REF_CONSTRAINTS" \
         --split "$SPLIT" \
         --generation_config "$GENERATION_CONFIG" \
-        --num_constraints "$NUM_CONSTRAINTS"
+        --num_constraints "$NUM_CONSTRAINTS" \
+        --upper_bound "$AUGMENT_UPPER_BOUND" \
+        --lower_bound "$AUGMENT_LOWER_BOUND"
 
     echo "[DONE] Augmentation complete"
 }
@@ -207,8 +211,8 @@ start_vllm
 wait_for_vllm
 
 # Run pipeline
-# run_augmentation
-# run_contradiction_check
+run_augmentation
+run_contradiction_check
 run_checklist_extraction
 
 # Copy results

@@ -37,8 +37,8 @@ GENERATION_CONFIG='{"temperature": 0.6, "top_p": 0.95, "extra_body": {"enable_th
 
 # Input dataset and args
 INPUT_DATASET="JingweiNi/magpie_creative_dedup"
-NUM_CONSTRAINTS=15
-VERSION="v1"
+NUM_CONSTRAINTS=10
+VERSION="max2_v1"
 
 # Step 1: Augmentation
 AUGMENT_REPO_NAME="magpie_creative_dedup_augmented_${SPLIT}_${VERSION}"
@@ -47,6 +47,8 @@ AUGMENT_OUTPUT_DIR="$PRIMUS_OUTPUT_DIR/$AUGMENT_REPO_NAME"
 AUGMENT_SYSTEM_PROMPT="$ROOT/prompt/constraint_augmentation.txt"
 AUGMENT_USER_PROMPT="$ROOT/prompt/constraint_augmentation_user.txt"
 AUGMENT_REF_CONSTRAINTS="$ROOT/prompt/reference_constraints_v2.txt"
+AUGMENT_LOWER_BOUND=1
+AUGMENT_UPPER_BOUND=2
 
 # Step 2: Contradiction Check
 FILTER_REPO_NAME="magpie_creative_dedup_filtered_${SPLIT}_${VERSION}"
@@ -119,7 +121,9 @@ run_augmentation() {
         --reference_constraints_path "$AUGMENT_REF_CONSTRAINTS" \
         --split "$SPLIT" \
         --generation_config "$GENERATION_CONFIG" \
-        --num_constraints "$NUM_CONSTRAINTS"
+        --num_constraints "$NUM_CONSTRAINTS" \
+        --upper_bound "$AUGMENT_UPPER_BOUND" \
+        --lower_bound "$AUGMENT_LOWER_BOUND"
 
     echo "[DONE] Augmentation complete"
 }
@@ -207,8 +211,8 @@ start_vllm
 wait_for_vllm
 
 # Run pipeline
-# run_augmentation
-# run_contradiction_check
+run_augmentation
+run_contradiction_check
 run_checklist_extraction
 
 # Copy results
