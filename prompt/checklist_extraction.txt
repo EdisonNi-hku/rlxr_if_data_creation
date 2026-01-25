@@ -1,5 +1,3 @@
-Prompt Template for Constraint Extraction from Instruction
-
 # Task Description
 You are a professional instruction analysis expert. You need to extract all possible checklist items and constraints that could affect the evaluation of a future response, based solely on the given [Instruction].
 

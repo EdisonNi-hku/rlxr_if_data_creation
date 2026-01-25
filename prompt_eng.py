@@ -135,7 +135,7 @@ def main():
         "-m", "--model",
         type=str,
         default="openai/gpt-oss-120b",
-        help=f"Model name (default: openai/gpt-oss-120b). Available: {list(GENERATION_CONFIGS.keys())}",
+        help=f"Model name (default: openai/gpt-oss-120b).",
     )
     parser.add_argument(
         "--base-url",

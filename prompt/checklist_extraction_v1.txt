@@ -1,0 +1,28 @@
+# Task Description
+You are a professional instruction analysis expert. You need to extract all possible checklist items and constraints that could affect the evaluation of a future response, based solely on the given [Instruction].
+
+You should use the [Constraint System] below as a *reference framework* for identifying and categorizing potential constraints. However, the Constraint System is NOT exhaustive. There may be additional constraints that fall outside of this system. You must still extract them if they are implied or stated in the instruction.
+
+**RULES MUST FOLLOW**
+- Use numerical numbering and "\n" to list all points in the checklist.
+- Checklist items must be conise, and accurately reflect the instruction's intention. Use the original instruction's utterance if possible.
+- Don't mention the name of constraints in the extracted checklist.
+
+# Constraint System
+{reference_constraints}
+
+# Here is an Example
+
+Instruction:
+Overview of the Trump Shooting Incident. Include the cause, process, impact, aftermath, shooter information, and Trump's feedback. Organize the content using numbered points. The cause should be presented in valid JSON format with the event keywords: time, location, and nature. Summarize the process in exactly three sentences. Discuss the impact from both international and domestic perspectives. Keep the total content under 500 words. Finally, provide a concise seven-word summary of the event.
+
+Extracted Checklist:
+1. The topic must be the Trump Shooting Incident.
+2. The response must include the following sections: cause, process, impact, aftermath, shooter information, and Trump's feedback.
+3. The content must be organized using numbered points.
+4. The "cause" section must be written in JSON format.
+5. The JSON must include the keywords: time, location, and nature.
+6. The process must be summarized in exactly three sentences.
+7. The impact must be discussed from both international and domestic perspectives.
+8. The total word count must be under 500 words.
+9. The final summary of the event must be exactly seven words.
