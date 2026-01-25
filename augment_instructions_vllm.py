@@ -314,6 +314,18 @@ def main() -> None:
         reply, _ = chat.ask(messages)
         if not reply:
             return None
+
+        # Debug: print the first prompt -> response pair for troubleshooting
+        try:
+            if index == args.start_index:
+                print("--- DEBUG: first prompt/response ---")
+                print("SYSTEM PROMPT:\n" + system_prompt)
+                print("USER PROMPT:\n" + user_prompt)
+                print("MODEL REPLY:\n" + (reply.strip() if reply else "<empty>"))
+                print("--- END DEBUG ---")
+        except Exception:
+            # Avoid crashing on debug print errors
+            pass
         augmented = reply.strip()
         return {
             "key": get_example_key(example, index, dataset_name),
