@@ -33,6 +33,7 @@ echo "[INFO] Local dataset mode: $LOCAL_DATASET"
 
 OSS_SAVE_PATH="/primus_datasets/jingwei"
 ROOT="/root/code/rlxr_if_data_creation"
+REF_CONSTRAINTS="$ROOT/prompt/reference_constraints_v2.txt"
 
 # Model configuration
 FULL_ANNOTATOR_MODEL="/root/models/Qwen3-235B-A22B-Thinking-2507-FP8"
@@ -55,6 +56,7 @@ GENERATION_CONFIG='{"temperature": 0.6, "top_p": 0.95, "extra_body": {"enable_th
 # Dataset configuration
 INPUT_DATASET=${INPUT_DATASET:-"NOT_SETTED"}
 REPO_NAME_BASE=${REPO_NAME_BASE:-"NOT_SETTED"}
+INSTRUCTION_FIELD=${INSTRUCTION_FIELD:-"raw_prompt"}
 
 echo "[INFO] Input dataset: $INPUT_DATASET"
 echo "[INFO] Repo name base: $REPO_NAME_BASE"
@@ -130,6 +132,8 @@ run_checklist_extraction() {
         --generation_config "$GENERATION_CONFIG"
         --partition_num "$PARTITION_NUM"
         --partition_index "$PARTITION_INDEX"
+        --reference_constraints_path "$REF_CONSTRAINTS"
+        --instruction_field "$INSTRUCTION_FIELD"
     )
 
     # Add push_to_hub only if not in local dataset mode
