@@ -18,8 +18,8 @@ echo "[INFO] PRIMUS_OUTPUT_DIR=$PRIMUS_OUTPUT_DIR"
 # Partitioning Configuration (from environment)
 # ============================================================================
 
-PARTITION_NUM=${NNODES:-1}
-PARTITION_INDEX=${RANK:-0}
+PARTITION_NUM=${PARTITION_NUM:-$NNODES}
+PARTITION_INDEX=${PARTITION_INDEX:-$RANK}
 
 echo "[INFO] Partition: $PARTITION_INDEX of $PARTITION_NUM"
 

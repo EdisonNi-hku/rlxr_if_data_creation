@@ -18,8 +18,8 @@ echo "[INFO] PRIMUS_OUTPUT_DIR=$PRIMUS_OUTPUT_DIR"
 # Partitioning Configuration (from environment)
 # ============================================================================
 
-PARTITION_NUM=${NNODES:-1}
-PARTITION_INDEX=${RANK:-0}
+PARTITION_NUM=${PARTITION_NUM:-${NNODES:-1}}
+PARTITION_INDEX=${PARTITION_INDEX:-${RANK:-0}}
 
 echo "[INFO] Partition: $PARTITION_INDEX of $PARTITION_NUM"
 
@@ -35,7 +35,7 @@ OSS_SAVE_PATH="/primus_datasets/jingwei"
 ROOT="/root/code/rlxr_if_data_creation"
 
 # Model configuration
-FULL_ANNOTATOR_MODEL="/root/models/Qwen3-235B-A22B-Instruct-2507-FP8"
+FULL_ANNOTATOR_MODEL="/root/models/Qwen3-235B-A22B-Thinking-2507-FP8"
 GPU_NUM=8
 GPU_MEM_UTILIZATION=0.7
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
