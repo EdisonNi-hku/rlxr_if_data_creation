@@ -96,7 +96,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--save_to_disk",
-        required=True,
+        default=None,
         help="Path to save a Hugging Face dataset with save_to_disk.",
     )
     parser.add_argument(
@@ -187,7 +187,33 @@ def main() -> None:
             "a single user message."
         ),
     )
+    parser.add_argument(
+        "--save_prompts_jsonl",
+        default=None,
+        help=(
+            "If set, save all prompts to this JSONL file instead of calling vLLM. "
+            "Each line will be {\"prompt\": [{\"role\": \"system\", ...}, {\"role\": \"user\", ...}]}."
+        ),
+    )
+    parser.add_argument(
+        "--partition_num",
+        type=int,
+        default=1,
+        help="Total number of partitions (for distributed processing). Default: 1 (no partitioning).",
+    )
+    parser.add_argument(
+        "--partition_index",
+        type=int,
+        default=0,
+        help="Index of the current partition (0-based). Default: 0.",
+    )
     args = parser.parse_args()
+
+    # Validate partition arguments
+    if args.partition_num < 1:
+        parser.error("--partition_num must be >= 1")
+    if args.partition_index < 0 or args.partition_index >= args.partition_num:
+        parser.error(f"--partition_index must be in range [0, {args.partition_num - 1}]")
 
     system_prompt = load_prompt(args.system_prompt_path)
     reference_constraints = load_prompt(args.reference_constraints_path)
@@ -202,15 +228,29 @@ def main() -> None:
     elif args.model not in GENERATION_CONFIGS:
         generation_config = {}
 
-    chat = LocalChat(
-        model=args.model,
-        base_url=args.base_url,
-        cache_path=args.cache_path,
-        generation_config=generation_config,
-    )
+    # Only initialize chat client if we're not just saving prompts
+    chat = None
+    if not args.save_prompts_jsonl:
+        chat = LocalChat(
+            model=args.model,
+            base_url=args.base_url,
+            cache_path=args.cache_path,
+            generation_config=generation_config,
+        )
 
     dataset = build_dataset(args.input_dataset, args.split, args.streaming)
     dataset_name = os.path.basename(args.input_dataset).replace("/", "_")
+
+    # Apply partitioning if specified (round-robin to distribute remainder evenly)
+    if args.partition_num > 1:
+        if args.streaming:
+            raise ValueError("Partitioning is not supported with streaming mode.")
+        total_size = len(dataset)
+        # Round-robin: node i gets indices i, i+n, i+2n, ... where n = partition_num
+        indices = list(range(args.partition_index, total_size, args.partition_num))
+        dataset = dataset.select(indices)
+        print(f"[PARTITION] Processing partition {args.partition_index} of {args.partition_num}: "
+              f"{len(indices)} samples (round-robin from {total_size} total)")
 
     processed = 0
     skipped = 0
@@ -218,9 +258,11 @@ def main() -> None:
     total = None if args.streaming else len(dataset)
 
     results_map: dict[int, dict] = {}
+    prompts_list: list[dict] = []
     iterator = enumerate(dataset)
 
-    def build_result(index: int, example: dict) -> Optional[dict]:
+    def build_messages(index: int, example: dict) -> Optional[tuple[str, list[dict]]]:
+        """Build the messages for an example. Returns (raw_instruction, messages) or None."""
         raw_instruction = get_original_instruction(
             example,
             args.instruction_field,
@@ -235,6 +277,14 @@ def main() -> None:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ]
+        return raw_instruction, messages
+
+    def build_result(index: int, example: dict) -> Optional[dict]:
+        result = build_messages(index, example)
+        if result is None:
+            return None
+        raw_instruction, messages = result
+        
         reply, _ = chat.ask(messages)
         if not reply:
             return None
@@ -243,8 +293,7 @@ def main() -> None:
         try:
             if index == args.start_index:
                 print("--- DEBUG: first prompt/response ---")
-                print("SYSTEM PROMPT:\n" + system_prompt)
-                print("USER PROMPT:\n" + user_prompt)
+                print("MESSAGES:\n" + json.dumps(messages, indent=2))
                 print("MODEL REPLY:\n" + (reply.strip() if reply else "<empty>"))
                 print("--- END DEBUG ---")
         except Exception:
@@ -260,6 +309,38 @@ def main() -> None:
 
     max_inflight = max(1, args.max_inflight)
     limit = args.max_samples if args.max_samples is not None else total
+
+    # Mode 1: Save prompts only (no vLLM calls)
+    if args.save_prompts_jsonl:
+        pbar = tqdm(total=limit, unit="sample", desc="Building prompts")
+        for index, example in iterator:
+            if index < args.start_index:
+                continue
+            if args.max_samples is not None and submitted >= args.max_samples:
+                break
+            submitted += 1
+            result = build_messages(index, example)
+            if result is None:
+                skipped += 1
+            else:
+                _, messages = result
+                prompts_list.append({"prompt": messages})
+                processed += 1
+            pbar.update(1)
+            pbar.set_postfix({"✓": processed, "✗": skipped})
+        pbar.close()
+
+        if not prompts_list:
+            print("No prompts generated. Nothing to save.")
+            return
+
+        with open(args.save_prompts_jsonl, "w", encoding="utf-8") as f:
+            for row in prompts_list:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        print(f"Done! Saved {processed} prompts to {args.save_prompts_jsonl}, skipped {skipped}.")
+        return
+
+    # Mode 2: Call vLLM and save results
     pbar = tqdm(total=limit, unit="sample", desc="Checklist extraction")
 
     def handle_future(future, index: int):
