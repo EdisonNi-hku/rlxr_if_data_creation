@@ -77,7 +77,7 @@ def get_original_instruction(example: dict, instruction_field: str) -> Optional[
 def get_example_key(example: dict, index: int, dataset_name: str) -> str:
     for field in ["id", "uuid", "key", "idx", "index"]:
         if field in example and example[field]:
-            return f"{dataset_name}_{example[field]}"
+            return str(example[field])
     return f"{dataset_name}_{index}"
 
 

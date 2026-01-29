@@ -48,11 +48,11 @@ TIMEOUT=600
 # Processing configuration
 N_THREADS=64
 MAX_INFLIGHT=128
-SPLIT="train"
 GENERATION_CONFIG='{"temperature": 0.6, "top_p": 0.95, "extra_body": {"enable_thinking": true, "top_k": 20}}'
 
 # Input dataset and args
 INPUT_DATASET=${INPUT_DATASET:-"NOT_SETTED"}
+SPLIT=${SPLIT:-"train"}
 REPO_NAME_BASE=${REPO_NAME_BASE:-"NOT_SETTED"}
 
 echo "[INFO] Input dataset: $INPUT_DATASET"

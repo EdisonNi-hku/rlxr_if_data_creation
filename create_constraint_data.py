@@ -106,7 +106,7 @@ def _get_instruction_conflicts() -> dict[str, set[str]]:
     return normalized
 
 
-def get_original_instruction(example: dict) -> str | None:
+def get_original_instruction(example: dict, instruction_field: str | None = None) -> str | None:
     """Extract the original instruction from various dataset formats.
 
     Supports common formats:
@@ -118,10 +118,16 @@ def get_original_instruction(example: dict) -> str | None:
 
     Args:
         example: A single example from the dataset.
+        instruction_field: Optional field name to extract instruction from.
 
     Returns:
         The extracted instruction string, or None if not found.
     """
+    # If instruction_field is specified, use it directly
+    if instruction_field and instruction_field in example and example[instruction_field]:
+        value = example[instruction_field]
+        return value if isinstance(value, str) else str(value)
+
     # Format 1: messages list (common in chat datasets)
     if "messages" in example and isinstance(example["messages"], list):
         for msg in example["messages"]:
@@ -159,10 +165,10 @@ def get_example_key(example: dict, index: int, dataset_name: str) -> str:
     Returns:
         A unique key string.
     """
-    # Try to use existing ID fields
-    for field in ["id", "key", "idx", "index"]:
+    # Try to use existing ID fields (return raw key without prefix)
+    for field in ["id", "uuid", "key", "idx", "index"]:
         if field in example and example[field]:
-            return f"{dataset_name}_{example[field]}"
+            return str(example[field])
 
     # Fall back to index-based key
     return f"{dataset_name}_{index}"
@@ -268,6 +274,8 @@ def create_constrained_example(
     dataset_name: str,
     min_constraints: int,
     max_constraints: int,
+    instruction_field: str | None = None,
+    append_mode: bool = False,
 ) -> dict | None:
     """Create a constrained version of an example.
 
@@ -277,11 +285,13 @@ def create_constrained_example(
         dataset_name: Name of the source dataset.
         min_constraints: Minimum number of constraints to add.
         max_constraints: Maximum number of constraints to add.
+        instruction_field: Optional field name to extract instruction from.
+        append_mode: If True, append new columns to original data. If False, create new record.
 
     Returns:
         New example with constraints, or None if instruction couldn't be extracted.
     """
-    instruction = get_original_instruction(example)
+    instruction = get_original_instruction(example, instruction_field)
     if not instruction:
         return None
 
@@ -302,20 +312,34 @@ def create_constrained_example(
     # Determine constraint type
     constraint_type = "single" if len(constraints) == 1 else "multi"
 
-    # Build the output example
-    return {
-        "key": get_example_key(example, index, dataset_name),
-        "messages": [
+    if append_mode:
+        # Append mode: keep all original columns and add new ones with suffix
+        result = dict(example)
+        result["messages_verifiable"] = [
             {
                 "role": "user",
                 "content": constrained_instruction,
             }
-        ],
-        "ground_truth": json.dumps(ground_truth),
-        "dataset": dataset_name,
-        "constraint_type": constraint_type,
-        "constraint": constraint_text,
-    }
+        ]
+        result["ground_truth_verifiable"] = json.dumps(ground_truth)
+        result["constraint_type_verifiable"] = constraint_type
+        result["constraint_verifiable"] = constraint_text
+        return result
+    else:
+        # Original mode: create new record with only constraint fields
+        return {
+            "key": get_example_key(example, index, dataset_name),
+            "messages": [
+                {
+                    "role": "user",
+                    "content": constrained_instruction,
+                }
+            ],
+            "ground_truth": json.dumps(ground_truth),
+            "dataset": dataset_name,
+            "constraint_type": constraint_type,
+            "constraint": constraint_text,
+        }
 
 
 def process_dataset(
@@ -329,6 +353,8 @@ def process_dataset(
     split: str = "train",
     seed: int = 42,
     streaming: bool = False,
+    instruction_field: str | None = None,
+    append_mode: bool = False,
 ) -> None:
     """Process a dataset and create constrained examples.
 
@@ -343,6 +369,8 @@ def process_dataset(
         split: Dataset split to use.
         seed: Random seed for reproducibility.
         streaming: Whether to use streaming mode for large datasets.
+        instruction_field: Optional field name to extract instruction from.
+        append_mode: If True, append new columns to original data. If False, create new record.
     """
     random.seed(seed)
 
@@ -390,6 +418,8 @@ def process_dataset(
             dataset_name,
             min_constraints,
             max_constraints,
+            instruction_field,
+            append_mode,
         )
 
         if constrained_example:
@@ -487,6 +517,17 @@ def main():
         action="store_true",
         help="Use streaming mode for large datasets",
     )
+    parser.add_argument(
+        "--instruction_field",
+        type=str,
+        default=None,
+        help="Field name to extract instruction from (if not specified, auto-detect)",
+    )
+    parser.add_argument(
+        "--append_mode",
+        action="store_true",
+        help="Append new columns to original dataset instead of creating new records (columns will have '_verifiable' suffix)",
+    )
 
     args = parser.parse_args()
 
@@ -504,6 +545,8 @@ def main():
         split=args.split,
         seed=args.seed,
         streaming=args.streaming,
+        instruction_field=args.instruction_field,
+        append_mode=args.append_mode,
     )
 
 
