@@ -514,6 +514,20 @@ def main() -> None:
     print(f"Generating rollouts for {len(prompts)} prompts...")
     outputs = llm.generate(prompts, sampling_params)
 
+    # Save raw outputs before processing
+    raw_outputs_path = args.output_path.replace(".jsonl", "_raw.jsonl") if args.output_path else "raw_outputs.jsonl"
+    print(f"Saving raw outputs to: {raw_outputs_path}")
+    with open(raw_outputs_path, "w", encoding="utf-8") as f:
+        for ex, output in zip(examples_to_process, outputs):
+            raw_result = {
+                "index": ex["index"],
+                "instruction": ex["instruction"],
+                "ground_truth": ex["ground_truth"],
+                "responses": [out.text for out in output.outputs],
+            }
+            f.write(json.dumps(raw_result, ensure_ascii=False) + "\n")
+    print(f"Raw outputs saved.")
+
     # Process outputs
     for ex, output in tqdm(zip(examples_to_process, outputs), total=len(examples_to_process), desc="Processing outputs"):
             # Extract all n responses
