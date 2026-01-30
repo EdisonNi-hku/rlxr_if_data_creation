@@ -415,113 +415,112 @@ def main() -> None:
     if not args.output_path and not args.save_to_disk:
         parser.error("At least one of --output_path or --save_to_disk must be specified")
 
-    # Load system prompt if specified
-    system_prompt = args.system_prompt
-    if args.system_prompt_path:
-        with open(args.system_prompt_path, "r", encoding="utf-8") as f:
-            system_prompt = f.read().strip()
-
-    # Initialize vLLM
-    print(f"Loading model: {args.model}")
-    llm = LLM(
-        model=args.model,
-        tensor_parallel_size=args.tensor_parallel_size,
-        gpu_memory_utilization=args.gpu_memory_utilization,
-        dtype=args.dtype,
-        trust_remote_code=args.trust_remote_code,
-    )
-    tokenizer = llm.get_tokenizer()
-
-    # Create sampling params with n=num_rollouts for efficient batch generation
-    sampling_params = SamplingParams(
-        n=args.num_rollouts,
-        temperature=args.temperature,
-        top_p=args.top_p,
-        top_k=args.top_k if args.top_k > 0 else -1,
-        max_tokens=args.max_tokens,
-        presence_penalty=args.presence_penalty,
-        frequency_penalty=args.frequency_penalty,
-    )
-
-    print(f"Sampling params: n={args.num_rollouts}, temp={args.temperature}, top_p={args.top_p}")
-
-    # Load dataset
-    dataset = build_dataset(args.input_dataset, args.split, args.streaming)
-    dataset_name = os.path.basename(args.input_dataset).replace("/", "_")
-
-    # Apply partitioning if specified
-    if args.partition_num > 1:
-        if args.streaming:
-            raise ValueError("Partitioning is not supported with streaming mode.")
-        total_size = len(dataset)
-        indices = list(range(args.partition_index, total_size, args.partition_num))
-        dataset = dataset.select(indices)
-        print(f"[PARTITION] Processing partition {args.partition_index} of {args.partition_num}: "
-              f"{len(indices)} samples (round-robin from {total_size} total)")
-
-    # Determine sample limit (--sample overrides --max_samples for debugging)
-    sample_limit = args.sample if args.sample is not None else args.max_samples
-
-    # Prepare examples
-    examples_to_process = []
-    skipped_prep = 0
-
-    print("Preparing prompts...")
-    for index, example in enumerate(tqdm(dataset, desc="Preparing")):
-        if index < args.start_index:
-            continue
-        if sample_limit is not None and len(examples_to_process) >= sample_limit:
-            break
-
-        instruction = get_instruction_from_messages(example, args.instruction_field)
-        ground_truth = get_ground_truth(example)
-
-        if not instruction or ground_truth is None:
-            skipped_prep += 1
-            continue
-
-        # Build the prompt using chat template
-        prompt = build_chat_prompt(tokenizer, instruction, system_prompt)
-
-        examples_to_process.append({
-            "index": index,
-            "example": example,
-            "instruction": instruction,
-            "ground_truth": ground_truth,
-            "prompt": prompt,
-        })
-
-    print(f"Prepared {len(examples_to_process)} prompts, skipped {skipped_prep}")
-
-    if not examples_to_process:
-        print("No samples to process. Exiting.")
-        return
-
-    # Process all prompts at once
-    results = []
-    total_best_at_1 = 0.0
-    total_best_at_8 = 0.0
-    total_best_at_16 = 0.0
-    total_passed = 0
-    total_rollouts = 0
-    total_constraints = 0
-    total_constraints_passed = 0
-
-    # Extract all prompts
-    prompts = [ex["prompt"] for ex in examples_to_process]
-
     # Check for existing raw outputs
     raw_outputs_path = args.output_path.replace(".jsonl", "_raw.jsonl") if args.output_path else "raw_outputs.jsonl"
+    dataset_name = os.path.basename(args.input_dataset).replace("/", "_")
 
     if os.path.exists(raw_outputs_path):
         print(f"Found existing raw outputs: {raw_outputs_path}")
-        print("Loading from cache (skipping vLLM generation)...")
+        print("Loading from cache (skipping vLLM initialization and generation)...")
+        examples_to_process = []
         raw_responses = []
         with open(raw_outputs_path, "r", encoding="utf-8") as f:
             for line in f:
-                raw_responses.append(json.loads(line)["responses"])
+                data = json.loads(line)
+                examples_to_process.append({
+                    "index": data["index"],
+                    "example": {},
+                    "instruction": data["instruction"],
+                    "ground_truth": data["ground_truth"],
+                })
+                raw_responses.append(data["responses"])
         print(f"Loaded {len(raw_responses)} cached outputs.")
+        skipped_prep = 0
     else:
+        # Load system prompt if specified
+        system_prompt = args.system_prompt
+        if args.system_prompt_path:
+            with open(args.system_prompt_path, "r", encoding="utf-8") as f:
+                system_prompt = f.read().strip()
+
+        # Initialize vLLM
+        print(f"Loading model: {args.model}")
+        llm = LLM(
+            model=args.model,
+            tensor_parallel_size=args.tensor_parallel_size,
+            gpu_memory_utilization=args.gpu_memory_utilization,
+            dtype=args.dtype,
+            trust_remote_code=args.trust_remote_code,
+        )
+        tokenizer = llm.get_tokenizer()
+
+        # Create sampling params with n=num_rollouts for efficient batch generation
+        sampling_params = SamplingParams(
+            n=args.num_rollouts,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            top_k=args.top_k if args.top_k > 0 else -1,
+            max_tokens=args.max_tokens,
+            presence_penalty=args.presence_penalty,
+            frequency_penalty=args.frequency_penalty,
+        )
+
+        print(f"Sampling params: n={args.num_rollouts}, temp={args.temperature}, top_p={args.top_p}")
+
+        # Load dataset
+        dataset = build_dataset(args.input_dataset, args.split, args.streaming)
+
+        # Apply partitioning if specified
+        if args.partition_num > 1:
+            if args.streaming:
+                raise ValueError("Partitioning is not supported with streaming mode.")
+            total_size = len(dataset)
+            indices = list(range(args.partition_index, total_size, args.partition_num))
+            dataset = dataset.select(indices)
+            print(f"[PARTITION] Processing partition {args.partition_index} of {args.partition_num}: "
+                  f"{len(indices)} samples (round-robin from {total_size} total)")
+
+        # Determine sample limit (--sample overrides --max_samples for debugging)
+        sample_limit = args.sample if args.sample is not None else args.max_samples
+
+        # Prepare examples
+        examples_to_process = []
+        skipped_prep = 0
+
+        print("Preparing prompts...")
+        for index, example in enumerate(tqdm(dataset, desc="Preparing")):
+            if index < args.start_index:
+                continue
+            if sample_limit is not None and len(examples_to_process) >= sample_limit:
+                break
+
+            instruction = get_instruction_from_messages(example, args.instruction_field)
+            ground_truth = get_ground_truth(example)
+
+            if not instruction or ground_truth is None:
+                skipped_prep += 1
+                continue
+
+            # Build the prompt using chat template
+            prompt = build_chat_prompt(tokenizer, instruction, system_prompt)
+
+            examples_to_process.append({
+                "index": index,
+                "example": example,
+                "instruction": instruction,
+                "ground_truth": ground_truth,
+                "prompt": prompt,
+            })
+
+        print(f"Prepared {len(examples_to_process)} prompts, skipped {skipped_prep}")
+
+        if not examples_to_process:
+            print("No samples to process. Exiting.")
+            return
+
+        # Extract all prompts
+        prompts = [ex["prompt"] for ex in examples_to_process]
+
         # Generate with vLLM - n rollouts per prompt in a single call
         print(f"Generating rollouts for {len(prompts)} prompts...")
         outputs = llm.generate(prompts, sampling_params)
@@ -541,6 +540,20 @@ def main() -> None:
                 }
                 f.write(json.dumps(raw_result, ensure_ascii=False) + "\n")
         print(f"Raw outputs saved.")
+
+    if not examples_to_process:
+        print("No samples to process. Exiting.")
+        return
+
+    # Process all prompts at once
+    results = []
+    total_best_at_1 = 0.0
+    total_best_at_8 = 0.0
+    total_best_at_16 = 0.0
+    total_passed = 0
+    total_rollouts = 0
+    total_constraints = 0
+    total_constraints_passed = 0
 
     # Process outputs
     for ex, responses in tqdm(zip(examples_to_process, raw_responses), total=len(examples_to_process), desc="Processing outputs"):
