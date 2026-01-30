@@ -86,7 +86,8 @@ def verify_single_constraint(
         checker.build_description()
 
     try:
-        return checker.check_following(response)
+        result = checker.check_following(response)
+        return bool(result) if result is not None else False
     except Exception as e:
         print(f"Error checking constraint {constraint_id}: {e}")
         return False
