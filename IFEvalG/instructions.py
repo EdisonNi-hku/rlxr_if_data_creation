@@ -2323,7 +2323,7 @@ class LetterCountingChecker(Instruction):
         A string representing the instruction description.
         """
         if not N:
-            self._N = random.randint(2, 3)
+            self._N = random.randint(200, 700)
         else:
             self._N = N
         if not relation:
