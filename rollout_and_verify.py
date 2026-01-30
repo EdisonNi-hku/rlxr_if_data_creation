@@ -419,23 +419,66 @@ def main() -> None:
     raw_outputs_path = args.output_path.replace(".jsonl", "_raw.jsonl") if args.output_path else "raw_outputs.jsonl"
     dataset_name = os.path.basename(args.input_dataset).replace("/", "_")
 
+    # Load dataset
+    dataset = build_dataset(args.input_dataset, args.split, args.streaming)
+
+    # Apply partitioning if specified
+    if args.partition_num > 1:
+        if args.streaming:
+            raise ValueError("Partitioning is not supported with streaming mode.")
+        total_size = len(dataset)
+        indices = list(range(args.partition_index, total_size, args.partition_num))
+        dataset = dataset.select(indices)
+        print(f"[PARTITION] Processing partition {args.partition_index} of {args.partition_num}: "
+              f"{len(indices)} samples (round-robin from {total_size} total)")
+
+    # Determine sample limit (--sample overrides --max_samples for debugging)
+    sample_limit = args.sample if args.sample is not None else args.max_samples
+
+    # Prepare examples (always needed to get instruction and ground_truth)
+    examples_to_process = []
+    skipped_prep = 0
+
+    print("Preparing examples...")
+    for index, example in enumerate(tqdm(dataset, desc="Preparing")):
+        if index < args.start_index:
+            continue
+        if sample_limit is not None and len(examples_to_process) >= sample_limit:
+            break
+
+        instruction = get_instruction_from_messages(example, args.instruction_field)
+        ground_truth = get_ground_truth(example)
+
+        if not instruction or ground_truth is None:
+            skipped_prep += 1
+            continue
+
+        key = get_example_key(example, index, dataset_name)
+
+        examples_to_process.append({
+            "key": key,
+            "index": index,
+            "example": example,
+            "instruction": instruction,
+            "ground_truth": ground_truth,
+        })
+
+    print(f"Prepared {len(examples_to_process)} examples, skipped {skipped_prep}")
+
+    if not examples_to_process:
+        print("No samples to process. Exiting.")
+        return
+
     if os.path.exists(raw_outputs_path):
         print(f"Found existing raw outputs: {raw_outputs_path}")
         print("Loading from cache (skipping vLLM initialization and generation)...")
-        examples_to_process = []
-        raw_responses = []
+        cached_responses = {}
         with open(raw_outputs_path, "r", encoding="utf-8") as f:
             for line in f:
                 data = json.loads(line)
-                examples_to_process.append({
-                    "index": data["index"],
-                    "example": {},
-                    "instruction": data["instruction"],
-                    "ground_truth": data["ground_truth"],
-                })
-                raw_responses.append(data["responses"])
+                cached_responses[data["key"]] = data["responses"]
+        raw_responses = [cached_responses[ex["key"]] for ex in examples_to_process]
         print(f"Loaded {len(raw_responses)} cached outputs.")
-        skipped_prep = 0
     else:
         # Load system prompt if specified
         system_prompt = args.system_prompt
@@ -467,59 +510,12 @@ def main() -> None:
 
         print(f"Sampling params: n={args.num_rollouts}, temp={args.temperature}, top_p={args.top_p}")
 
-        # Load dataset
-        dataset = build_dataset(args.input_dataset, args.split, args.streaming)
-
-        # Apply partitioning if specified
-        if args.partition_num > 1:
-            if args.streaming:
-                raise ValueError("Partitioning is not supported with streaming mode.")
-            total_size = len(dataset)
-            indices = list(range(args.partition_index, total_size, args.partition_num))
-            dataset = dataset.select(indices)
-            print(f"[PARTITION] Processing partition {args.partition_index} of {args.partition_num}: "
-                  f"{len(indices)} samples (round-robin from {total_size} total)")
-
-        # Determine sample limit (--sample overrides --max_samples for debugging)
-        sample_limit = args.sample if args.sample is not None else args.max_samples
-
-        # Prepare examples
-        examples_to_process = []
-        skipped_prep = 0
-
-        print("Preparing prompts...")
-        for index, example in enumerate(tqdm(dataset, desc="Preparing")):
-            if index < args.start_index:
-                continue
-            if sample_limit is not None and len(examples_to_process) >= sample_limit:
-                break
-
-            instruction = get_instruction_from_messages(example, args.instruction_field)
-            ground_truth = get_ground_truth(example)
-
-            if not instruction or ground_truth is None:
-                skipped_prep += 1
-                continue
-
-            # Build the prompt using chat template
-            prompt = build_chat_prompt(tokenizer, instruction, system_prompt)
-
-            examples_to_process.append({
-                "index": index,
-                "example": example,
-                "instruction": instruction,
-                "ground_truth": ground_truth,
-                "prompt": prompt,
-            })
-
-        print(f"Prepared {len(examples_to_process)} prompts, skipped {skipped_prep}")
-
-        if not examples_to_process:
-            print("No samples to process. Exiting.")
-            return
-
-        # Extract all prompts
-        prompts = [ex["prompt"] for ex in examples_to_process]
+        # Build prompts using chat template
+        print("Building prompts...")
+        prompts = []
+        for ex in examples_to_process:
+            prompt = build_chat_prompt(tokenizer, ex["instruction"], system_prompt)
+            prompts.append(prompt)
 
         # Generate with vLLM - n rollouts per prompt in a single call
         print(f"Generating rollouts for {len(prompts)} prompts...")
@@ -533,9 +529,8 @@ def main() -> None:
                 responses = [out.text for out in output.outputs]
                 raw_responses.append(responses)
                 raw_result = {
-                    "index": ex["index"],
+                    "key": ex["key"],
                     "instruction": ex["instruction"],
-                    "ground_truth": ex["ground_truth"],
                     "responses": responses,
                 }
                 f.write(json.dumps(raw_result, ensure_ascii=False) + "\n")
@@ -585,7 +580,7 @@ def main() -> None:
             advantages = compute_advantages(scores)
 
             result = {
-                "key": get_example_key(ex["example"], ex["index"], dataset_name),
+                "key": ex["key"],
                 "instruction": ex["instruction"],
                 "ground_truth": ex["ground_truth"],
                 "responses": responses,
