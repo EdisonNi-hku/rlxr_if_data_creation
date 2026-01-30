@@ -2453,11 +2453,16 @@ class CountIncrementWordChecker(Instruction):
         if not keyword1:
             self._keyword1 = instructions_util.generate_keywords(num_keywords=1)
         else:
-            self._keyword1 = keyword1.strip()
+            if isinstance(keyword1, (list, tuple)):
+                keyword1 = keyword1[0] if keyword1 else None
+            self._keyword1 = keyword1.strip() if isinstance(keyword1, str) else str(keyword1)
+
         if not keyword2:
             self._keyword2 = instructions_util.generate_keywords(num_keywords=1)
         else:
-            self._keyword2 = keyword2.strip()
+            if isinstance(keyword2, (list, tuple)):
+                keyword2 = keyword2[0] if keyword2 else None
+            self._keyword2 = keyword2.strip() if isinstance(keyword2, str) else str(keyword2)
 
         self._description_pattern = (
             "Include keyword {keyword1} once in your response, keyword {keyword2} twice in your response."
