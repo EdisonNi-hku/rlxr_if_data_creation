@@ -6,7 +6,7 @@ Evaluate the [Model Answer] based on the [User Instruction] and the [CheckList],
 1. Follow the order of the [CheckList] points; output one per line, separated by "\n".
 2. For each line, first output the [CheckList] content, then a '\t', and finally the [Evaluation Score] (0 or 1).
 3. Do NOT include any explanations, justifications, or additional content.
-4. Output only the evaluation results.
+4. Output only the evaluation results. Only grade items from the [CheckList]. 
 
 [Examples]:
 
