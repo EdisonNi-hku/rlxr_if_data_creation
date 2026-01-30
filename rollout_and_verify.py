@@ -389,13 +389,6 @@ def main() -> None:
         help="Path to file containing system prompt.",
     )
 
-    # Batching arguments
-    parser.add_argument(
-        "--batch_size",
-        type=int,
-        default=64,
-        help="Number of prompts to process in each vLLM batch (default: 32).",
-    )
 
     # Partitioning arguments
     parser.add_argument(
@@ -504,7 +497,7 @@ def main() -> None:
         print("No samples to process. Exiting.")
         return
 
-    # Process in batches
+    # Process all prompts at once
     results = []
     total_best_at_1 = 0.0
     total_best_at_8 = 0.0
@@ -514,21 +507,15 @@ def main() -> None:
     total_constraints = 0
     total_constraints_passed = 0
 
-    num_batches = (len(examples_to_process) + args.batch_size - 1) // args.batch_size
+    # Extract all prompts
+    prompts = [ex["prompt"] for ex in examples_to_process]
 
-    for batch_idx in tqdm(range(num_batches), desc="Generating rollouts"):
-        batch_start = batch_idx * args.batch_size
-        batch_end = min(batch_start + args.batch_size, len(examples_to_process))
-        batch = examples_to_process[batch_start:batch_end]
+    # Generate with vLLM - n rollouts per prompt in a single call
+    print(f"Generating rollouts for {len(prompts)} prompts...")
+    outputs = llm.generate(prompts, sampling_params)
 
-        # Extract prompts for this batch
-        prompts = [ex["prompt"] for ex in batch]
-
-        # Generate with vLLM - n rollouts per prompt in a single call
-        outputs = llm.generate(prompts, sampling_params)
-
-        # Process outputs
-        for ex, output in zip(batch, outputs):
+    # Process outputs
+    for ex, output in tqdm(zip(examples_to_process, outputs), total=len(examples_to_process), desc="Processing outputs"):
             # Extract all n responses
             responses = [out.text for out in output.outputs]
 
