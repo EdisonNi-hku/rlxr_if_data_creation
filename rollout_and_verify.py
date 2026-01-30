@@ -63,7 +63,11 @@ def build_dataset(
             streaming=streaming,
         )
     if os.path.isdir(input_dataset):
-        return load_from_disk(input_dataset)
+        dataset = load_from_disk(input_dataset)
+        # Handle DatasetDict (has splits like 'train', 'test')
+        if hasattr(dataset, 'keys'):
+            return dataset[split]
+        return dataset
     try:
         return load_dataset(input_dataset, split=split, streaming=streaming)
     except Exception:
@@ -296,11 +300,6 @@ def main() -> None:
         "--save_to_disk",
         default=None,
         help="Path to save as HuggingFace dataset.",
-    )
-    parser.add_argument(
-        "--push_to_hub",
-        default=None,
-        help="Optional Hub repo_id to push after saving.",
     )
 
     # vLLM model arguments
@@ -639,10 +638,6 @@ def main() -> None:
         dataset_out = Dataset.from_list(flattened_results)
         dataset_out.save_to_disk(args.save_to_disk)
         print(f"Dataset saved to: {args.save_to_disk}")
-
-        if args.push_to_hub:
-            dataset_out.push_to_hub(args.push_to_hub)
-            print(f"Dataset pushed to: {args.push_to_hub}")
 
     print("\nDone!")
 
