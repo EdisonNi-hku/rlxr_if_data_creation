@@ -510,28 +510,40 @@ def main() -> None:
     # Extract all prompts
     prompts = [ex["prompt"] for ex in examples_to_process]
 
-    # Generate with vLLM - n rollouts per prompt in a single call
-    print(f"Generating rollouts for {len(prompts)} prompts...")
-    outputs = llm.generate(prompts, sampling_params)
-
-    # Save raw outputs before processing
+    # Check for existing raw outputs
     raw_outputs_path = args.output_path.replace(".jsonl", "_raw.jsonl") if args.output_path else "raw_outputs.jsonl"
-    print(f"Saving raw outputs to: {raw_outputs_path}")
-    with open(raw_outputs_path, "w", encoding="utf-8") as f:
-        for ex, output in zip(examples_to_process, outputs):
-            raw_result = {
-                "index": ex["index"],
-                "instruction": ex["instruction"],
-                "ground_truth": ex["ground_truth"],
-                "responses": [out.text for out in output.outputs],
-            }
-            f.write(json.dumps(raw_result, ensure_ascii=False) + "\n")
-    print(f"Raw outputs saved.")
+
+    if os.path.exists(raw_outputs_path):
+        print(f"Found existing raw outputs: {raw_outputs_path}")
+        print("Loading from cache (skipping vLLM generation)...")
+        raw_responses = []
+        with open(raw_outputs_path, "r", encoding="utf-8") as f:
+            for line in f:
+                raw_responses.append(json.loads(line)["responses"])
+        print(f"Loaded {len(raw_responses)} cached outputs.")
+    else:
+        # Generate with vLLM - n rollouts per prompt in a single call
+        print(f"Generating rollouts for {len(prompts)} prompts...")
+        outputs = llm.generate(prompts, sampling_params)
+
+        # Save raw outputs before processing
+        print(f"Saving raw outputs to: {raw_outputs_path}")
+        raw_responses = []
+        with open(raw_outputs_path, "w", encoding="utf-8") as f:
+            for ex, output in zip(examples_to_process, outputs):
+                responses = [out.text for out in output.outputs]
+                raw_responses.append(responses)
+                raw_result = {
+                    "index": ex["index"],
+                    "instruction": ex["instruction"],
+                    "ground_truth": ex["ground_truth"],
+                    "responses": responses,
+                }
+                f.write(json.dumps(raw_result, ensure_ascii=False) + "\n")
+        print(f"Raw outputs saved.")
 
     # Process outputs
-    for ex, output in tqdm(zip(examples_to_process, outputs), total=len(examples_to_process), desc="Processing outputs"):
-            # Extract all n responses
-            responses = [out.text for out in output.outputs]
+    for ex, responses in tqdm(zip(examples_to_process, raw_responses), total=len(examples_to_process), desc="Processing outputs"):
 
             # Handle thinking tokens if present
             clean_responses = []
