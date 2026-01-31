@@ -62,6 +62,7 @@ TEMPERATURE=${TEMPERATURE:-1}
 TOP_P=${TOP_P:-1}
 MAX_TOKENS=${MAX_TOKENS:-4096}
 SYSTEM_PROMPT_PATH=${SYSTEM_PROMPT_PATH:-""}
+SAMPLE=${SAMPLE:-""}
 
 # Grading configuration
 GRADING_NUM_WORKERS=${GRADING_NUM_WORKERS:-64}
@@ -99,6 +100,9 @@ echo "  Input dataset: $INPUT_DATASET"
 echo "  Checklist dataset: $CHECKLIST_DATASET"
 echo "  Rollout output: $ROLLOUT_OUTPUT"
 echo "  Graded output: $GRADED_OUTPUT"
+if [[ -n "$SAMPLE" ]]; then
+    echo "  Sample limit: $SAMPLE"
+fi
 
 # ============================================================================
 # Functions
@@ -170,10 +174,16 @@ run_rollout() {
     if [[ -n "$SYSTEM_PROMPT_PATH" ]]; then
         cmd_args+=(--system_prompt_path "$SYSTEM_PROMPT_PATH")
     fi
+    if [[ -n "$SAMPLE" ]]; then
+        cmd_args+=(--sample "$SAMPLE")
+    fi
 
     # Add strip_thinking if enabled
     if [[ "$STRIP_THINKING" == "true" ]]; then
         cmd_args+=(--strip_thinking)
+    fi
+    if [[ -n "$SAMPLE" ]]; then
+        cmd_args+=(--sample "$SAMPLE")
     fi
 
     python "$ROOT/rollout_only.py" "${cmd_args[@]}"

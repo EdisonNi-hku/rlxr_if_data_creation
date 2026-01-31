@@ -125,10 +125,10 @@ def main() -> None:
         help="Use streaming mode for large datasets.",
     )
     parser.add_argument(
-        "--max_samples",
+        "--sample",
         type=int,
         default=None,
-        help="Maximum number of samples to process.",
+        help="Limit number of samples for debugging.",
     )
     parser.add_argument(
         "--start_index",
@@ -324,12 +324,13 @@ def main() -> None:
     # Prepare examples
     examples_to_process = []
     skipped = 0
+    sample_limit = args.sample
 
     print("Preparing examples...")
     for index, example in enumerate(tqdm(dataset, desc="Preparing")):
         if index < args.start_index:
             continue
-        if args.max_samples is not None and len(examples_to_process) >= args.max_samples:
+        if sample_limit is not None and len(examples_to_process) >= sample_limit:
             break
 
         instruction = get_instruction_from_messages(example, args.instruction_field)

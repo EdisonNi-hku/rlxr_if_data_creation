@@ -172,10 +172,10 @@ def grade_single_response(
     response: str,
     checklist: str,
     no_system: bool,
-) -> tuple[float, list[int]]:
+) -> tuple[float, list[int], str]:
     """Grade a single response against a checklist using LLM.
 
-    Returns (score, individual_scores).
+    Returns (score, individual_scores, raw_reply).
     """
     user_prompt = user_prompt_template.format(
         user_instruction=instruction,
@@ -195,14 +195,14 @@ def grade_single_response(
 
     if not reply:
         num_items = count_checklist_items(checklist)
-        return 0.0, [0] * num_items
+        return 0.0, [0] * num_items, ""
 
     num_items = count_checklist_items(checklist)
     individual_scores = parse_eval_output(reply, num_items)
 
     score = sum(individual_scores) / len(individual_scores) if individual_scores else 0.0
 
-    return score, individual_scores
+    return score, individual_scores, reply
 
 
 def grade_rollouts(
@@ -280,15 +280,17 @@ def grade_rollouts(
     def grade_task(task):
         scores = []
         all_individual_scores = []
+        grader_outputs = []
 
         for response in task["responses"]:
             if not response:
                 num_items = count_checklist_items(task["checklist"])
                 scores.append(0.0)
                 all_individual_scores.append([0] * num_items)
+                grader_outputs.append("")
                 continue
 
-            score, individual_scores = grade_single_response(
+            score, individual_scores, raw_reply = grade_single_response(
                 chat,
                 system_prompt,
                 user_prompt_template,
@@ -299,6 +301,7 @@ def grade_rollouts(
             )
             scores.append(score)
             all_individual_scores.append(individual_scores)
+            grader_outputs.append(raw_reply)
 
         return task["rollout_idx"], {
             "key": task["key"],
@@ -307,6 +310,7 @@ def grade_rollouts(
             "responses": task["responses"],
             "scores": scores,
             "individual_scores": all_individual_scores,
+            "grader_outputs": grader_outputs,
         }
 
     pbar = tqdm(total=len(grading_tasks), desc="Grading responses")
@@ -371,6 +375,7 @@ def grade_rollouts(
             "best_at_8": best_at_8,
             "best_at_16": best_at_16,
             "individual_scores": result["individual_scores"],
+            "grader_outputs": result["grader_outputs"],
             "constraint_accuracy": sum(all_constraint_results) / len(all_constraint_results) if all_constraint_results else 0.0,
         }
         results.append(final_result)
@@ -508,6 +513,12 @@ def main():
         default=None,
         help="Optional path to save metrics as JSON.",
     )
+    parser.add_argument(
+        "--sample",
+        type=int,
+        default=None,
+        help="Limit number of samples for debugging.",
+    )
 
     # Grading options
     parser.add_argument(
@@ -596,6 +607,9 @@ def main():
     print(f"Loading results from: {args.input}")
     results = load_results(args.input, args.format)
     print(f"Loaded {len(results)} results.")
+    if args.sample is not None:
+        results = results[: args.sample]
+        print(f"Using first {len(results)} results for debugging.")
 
     # Grade if requested
     if args.grade:

@@ -267,12 +267,6 @@ def main() -> None:
         help="Use streaming mode for large datasets.",
     )
     parser.add_argument(
-        "--max_samples",
-        type=int,
-        default=None,
-        help="Maximum number of samples to process.",
-    )
-    parser.add_argument(
         "--sample",
         type=int,
         default=None,
@@ -432,8 +426,8 @@ def main() -> None:
         print(f"[PARTITION] Processing partition {args.partition_index} of {args.partition_num}: "
               f"{len(indices)} samples (round-robin from {total_size} total)")
 
-    # Determine sample limit (--sample overrides --max_samples for debugging)
-    sample_limit = args.sample if args.sample is not None else args.max_samples
+    # Determine sample limit for debugging
+    sample_limit = args.sample
 
     # Prepare examples (always needed to get instruction and ground_truth)
     examples_to_process = []
