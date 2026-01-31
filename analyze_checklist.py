@@ -317,29 +317,30 @@ def grade_rollouts(
 
     with ThreadPoolExecutor(max_workers=max(1, num_workers)) as executor:
         futures = {}
-        task_iter = iter(grading_tasks)
+        remaining_tasks = grading_tasks.copy()
 
         # Submit initial batch
-        for task in grading_tasks[:max_inflight]:
+        for _ in range(min(max_inflight, len(remaining_tasks))):
+            task = remaining_tasks.pop(0)
             future = executor.submit(grade_task, task)
             futures[future] = task["rollout_idx"]
 
-        remaining_tasks = grading_tasks[max_inflight:]
+        while futures:
+            for future in as_completed(list(futures.keys())):
+                try:
+                    rollout_idx, result = future.result()
+                    results_map[rollout_idx] = result
+                except Exception as e:
+                    tqdm.write(f"Error grading: {e}")
 
-        for future in as_completed(futures):
-            try:
-                rollout_idx, result = future.result()
-                results_map[rollout_idx] = result
-            except Exception as e:
-                tqdm.write(f"Error grading: {e}")
+                pbar.update(1)
+                futures.pop(future, None)
 
-            pbar.update(1)
-
-            # Submit next task if available
-            if remaining_tasks:
-                next_task = remaining_tasks.pop(0)
-                new_future = executor.submit(grade_task, next_task)
-                futures[new_future] = next_task["rollout_idx"]
+                # Submit next task if available
+                if remaining_tasks:
+                    next_task = remaining_tasks.pop(0)
+                    new_future = executor.submit(grade_task, next_task)
+                    futures[new_future] = next_task["rollout_idx"]
 
     pbar.close()
 
