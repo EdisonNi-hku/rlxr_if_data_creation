@@ -32,7 +32,8 @@ ROOT=${ROOT:-"/root/code/rlxr_if_data_creation"}
 
 # GPU configuration (shared by both models)
 GPU_NUM=${GPU_NUM:-8}
-GPU_MEM=${GPU_MEM:-0.9}
+GPU_MEM_A=${GPU_MEM_A:-0.95}
+GPU_MEM_B=${GPU_MEM_B:-0.8}
 
 # Model A: Rollout model
 MODEL_A=${MODEL_A:-"/root/models/Qwen3-8B"}
@@ -108,7 +109,7 @@ start_vllm_model_b() {
     local cmd="vllm serve $MODEL_B \
         --port $VLLM_PORT \
         --tensor-parallel-size $GPU_NUM \
-        --gpu_memory_utilization $GPU_MEM \
+        --gpu_memory_utilization $GPU_MEM_B \
         $MODEL_B_EXTRA_ARGS"
 
     echo "[INFO] Command: $cmd"
@@ -153,7 +154,7 @@ run_rollout() {
         --output_path "$ROLLOUT_OUTPUT_ARG"
         --model "$MODEL_A"
         --tensor_parallel_size "$GPU_NUM"
-        --gpu_memory_utilization "$GPU_MEM"
+        --gpu_memory_utilization "$GPU_MEM_A"
         --split "$SPLIT"
         --instruction_field "$INSTRUCTION_FIELD"
         --num_rollouts "$NUM_ROLLOUTS"
