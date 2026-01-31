@@ -371,6 +371,36 @@ def analyze(results: list[dict], k_values: list[int] = None):
     }
 
 
+def save_dataset_with_scores(
+    dataset_path: str,
+    split: str,
+    results: list[dict],
+    output_path: str,
+) -> None:
+    """Append scores and variance to the dataset and save to disk."""
+    dataset = build_dataset(dataset_path, split, streaming=False)
+    dataset_name = os.path.basename(dataset_path).replace("/", "_")
+
+    score_map = {}
+    variance_map = {}
+    for result in results:
+        scores = result.get("scores", [])
+        score_map[result["key"]] = scores
+        variance_map[result["key"]] = 1 if len(set(scores)) > 1 else 0
+
+    scores_column = []
+    variance_column = []
+    for index, example in enumerate(tqdm(dataset, desc="Appending scores")):
+        key = get_example_key(example, index, dataset_name)
+        scores = score_map.get(key, [])
+        scores_column.append(scores)
+        variance_column.append(variance_map.get(key, 0))
+
+    dataset = dataset.add_column("scores", scores_column)
+    dataset = dataset.add_column("verifiable_has_variance", variance_column)
+    dataset.save_to_disk(output_path)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Analyze and optionally grade rollout results.")
     parser.add_argument(
@@ -432,6 +462,12 @@ def main():
         default=None,
         help="Optional path to save graded results as JSONL.",
     )
+    parser.add_argument(
+        "--save_dataset",
+        type=str,
+        default=None,
+        help="Path to save the dataset with appended scores/variance.",
+    )
 
     args = parser.parse_args()
 
@@ -473,6 +509,21 @@ def main():
                 for result in results:
                     f.write(json.dumps(result, ensure_ascii=False) + "\n")
             print(f"Graded results saved to: {args.save_graded}")
+
+        output_path = args.save_dataset
+        if output_path is None:
+            if os.path.isdir(args.dataset):
+                output_path = f"{args.dataset}_with_rollout_scores"
+            else:
+                output_path = f"{os.path.basename(args.dataset)}_with_rollout_scores"
+
+        save_dataset_with_scores(
+            args.dataset,
+            args.split,
+            results,
+            output_path,
+        )
+        print(f"Dataset with scores saved to: {output_path}")
 
     metrics = analyze(results, args.k)
 
