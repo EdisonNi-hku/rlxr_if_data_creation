@@ -13,7 +13,7 @@
 set -euo pipefail
 
 echo "[INFO] Starting rollout and grade pipeline"
-echo "[INFO] PRIMUS_OUTPUT_DIR=${PRIMUS_OUTPUT_DIR:-./output}"
+echo "[INFO] PRIMUS_OUTPUT_DIR=${PRIMUS_OUTPUT_DIR}"
 
 # ============================================================================
 # Partitioning Configuration (from environment)
@@ -29,7 +29,6 @@ echo "[INFO] Partition: $PARTITION_INDEX of $PARTITION_NUM"
 # ============================================================================
 
 ROOT=${ROOT:-"/root/code/rlxr_if_data_creation"}
-PRIMUS_OUTPUT_DIR=${PRIMUS_OUTPUT_DIR:-"$ROOT/output"}
 
 # GPU configuration (shared by both models)
 GPU_NUM=${GPU_NUM:-8}
