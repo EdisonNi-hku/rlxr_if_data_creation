@@ -379,12 +379,6 @@ def main():
         help="Path to input JSONL file or HuggingFace dataset directory.",
     )
     parser.add_argument(
-        "--input_base",
-        type=str,
-        default=None,
-        help="Base path for partitioned JSONL inputs (without _pX_of_N suffix).",
-    )
-    parser.add_argument(
         "--partition_num",
         type=int,
         default=1,
@@ -451,7 +445,7 @@ def main():
         parser.error("--partition_num is only supported with --format jsonl")
 
     if args.partition_num > 1:
-        base_path = args.input_base or args.input
+        base_path = args.input
         input_paths = build_partition_paths(base_path, args.partition_num)
         for path in input_paths:
             if not os.path.exists(path):
