@@ -28,6 +28,7 @@ import argparse
 import json
 import math
 import os
+import re
 from collections import defaultdict
 
 from datasets import load_dataset, load_from_disk
@@ -149,19 +150,36 @@ def verify_responses(
     return rollout_results, num_passed, all_constraint_results
 
 
-def load_results(input_path: str, format: str):
-    """Load results from JSONL file or HuggingFace dataset."""
+def load_results(input_paths: list[str], format: str):
+    """Load results from JSONL file(s) or HuggingFace dataset."""
     if format == "jsonl":
         results = []
-        with open(input_path, "r", encoding="utf-8") as f:
-            for line in f:
-                results.append(json.loads(line))
+        for input_path in input_paths:
+            with open(input_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    results.append(json.loads(line))
         return results
     elif format == "disk":
-        dataset = load_from_disk(input_path)
+        if len(input_paths) != 1:
+            raise ValueError("HuggingFace disk format does not support partitioned inputs.")
+        dataset = load_from_disk(input_paths[0])
         return list(dataset)
     else:
         raise ValueError(f"Unknown format: {format}")
+
+
+def strip_partition_suffix(path: str) -> str:
+    """Strip _p{idx}_of_{num} suffix if present."""
+    base, ext = os.path.splitext(path)
+    base = re.sub(r"_p\d+_of_\d+$", "", base)
+    return f"{base}{ext}"
+
+
+def build_partition_paths(base_path: str, partition_num: int) -> list[str]:
+    """Build partitioned file paths from a base path."""
+    base_path = strip_partition_suffix(base_path)
+    base, ext = os.path.splitext(base_path)
+    return [f"{base}_p{idx}_of_{partition_num}{ext}" for idx in range(partition_num)]
 
 
 def grade_rollouts(
@@ -361,6 +379,18 @@ def main():
         help="Path to input JSONL file or HuggingFace dataset directory.",
     )
     parser.add_argument(
+        "--input_base",
+        type=str,
+        default=None,
+        help="Base path for partitioned JSONL inputs (without _pX_of_N suffix).",
+    )
+    parser.add_argument(
+        "--partition_num",
+        type=int,
+        default=1,
+        help="Total number of partitions for partitioned JSONL inputs.",
+    )
+    parser.add_argument(
         "--format",
         choices=["jsonl", "disk"],
         default="jsonl",
@@ -414,8 +444,24 @@ def main():
     if args.grade and not args.dataset:
         parser.error("--dataset is required when using --grade")
 
-    print(f"Loading results from: {args.input}")
-    results = load_results(args.input, args.format)
+    if args.partition_num < 1:
+        parser.error("--partition_num must be >= 1")
+
+    if args.partition_num > 1 and args.format != "jsonl":
+        parser.error("--partition_num is only supported with --format jsonl")
+
+    if args.partition_num > 1:
+        base_path = args.input_base or args.input
+        input_paths = build_partition_paths(base_path, args.partition_num)
+        for path in input_paths:
+            if not os.path.exists(path):
+                raise FileNotFoundError(f"Missing partition file: {path}")
+        print(f"Loading results from {len(input_paths)} partitions (base: {base_path})")
+    else:
+        input_paths = [args.input]
+        print(f"Loading results from: {args.input}")
+
+    results = load_results(input_paths, args.format)
     print(f"Loaded {len(results)} results.")
 
     # Grade if requested
