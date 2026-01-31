@@ -265,6 +265,12 @@ def main() -> None:
     if args.partition_index < 0 or args.partition_index >= args.partition_num:
         parser.error(f"--partition_index must be in range [0, {args.partition_num - 1}]")
 
+    # Add partition suffix to output path if partitioning is enabled
+    if args.partition_num > 1:
+        base, ext = os.path.splitext(args.output_path)
+        args.output_path = f"{base}_p{args.partition_index}_of_{args.partition_num}{ext}"
+        print(f"[PARTITION] Output path: {args.output_path}")
+
     # Check for existing output (resume support)
     if os.path.exists(args.output_path):
         print(f"Output file already exists: {args.output_path}")

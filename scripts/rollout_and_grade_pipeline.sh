@@ -79,15 +79,15 @@ OUTPUT_NAME_BASE=${OUTPUT_NAME_BASE:-"rollouts_${VERSION}"}
 # Add partition suffix if partitioning is enabled
 if [[ "$PARTITION_NUM" -gt 1 ]]; then
     PARTITION_SUFFIX="_p${PARTITION_INDEX}_of_${PARTITION_NUM}"
-    OUTPUT_NAME="${OUTPUT_NAME_BASE}${PARTITION_SUFFIX}"
 else
-    OUTPUT_NAME="$OUTPUT_NAME_BASE"
+    PARTITION_SUFFIX=""
 fi
 
-# Output paths
-ROLLOUT_OUTPUT="$PRIMUS_OUTPUT_DIR/${OUTPUT_NAME}_raw.jsonl"
-GRADED_OUTPUT="$PRIMUS_OUTPUT_DIR/${OUTPUT_NAME}_graded.jsonl"
-METRICS_OUTPUT="$PRIMUS_OUTPUT_DIR/${OUTPUT_NAME}_metrics.json"
+# Output paths (rollout_only.py adds partition suffix automatically)
+ROLLOUT_OUTPUT_ARG="$PRIMUS_OUTPUT_DIR/${OUTPUT_NAME_BASE}.jsonl"
+ROLLOUT_OUTPUT="$PRIMUS_OUTPUT_DIR/${OUTPUT_NAME_BASE}${PARTITION_SUFFIX}.jsonl"
+GRADED_OUTPUT="$PRIMUS_OUTPUT_DIR/${OUTPUT_NAME_BASE}${PARTITION_SUFFIX}_graded.jsonl"
+METRICS_OUTPUT="$PRIMUS_OUTPUT_DIR/${OUTPUT_NAME_BASE}${PARTITION_SUFFIX}_metrics.json"
 
 # Strip thinking tokens
 STRIP_THINKING=${STRIP_THINKING:-true}
@@ -166,7 +166,7 @@ run_rollout() {
     # Build command arguments
     local cmd_args=(
         --input_dataset "$INPUT_DATASET"
-        --output_path "$ROLLOUT_OUTPUT"
+        --output_path "$ROLLOUT_OUTPUT_ARG"
         --model "$MODEL_A"
         --tensor_parallel_size "$GPU_NUM"
         --gpu_memory_utilization "$GPU_MEM"
@@ -177,6 +177,8 @@ run_rollout() {
         --top_p "$TOP_P"
         --max_tokens "$MAX_TOKENS"
         --trust_remote_code
+        --partition_num "$PARTITION_NUM"
+        --partition_index "$PARTITION_INDEX"
     )
 
     # Add system prompt if specified
@@ -187,11 +189,6 @@ run_rollout() {
     # Add strip_thinking if enabled
     if [[ "$STRIP_THINKING" == "true" ]]; then
         cmd_args+=(--strip_thinking)
-    fi
-
-    # Add partition args
-    if [[ "$PARTITION_NUM" -gt 1 ]]; then
-        cmd_args+=(--partition_num "$PARTITION_NUM" --partition_index "$PARTITION_INDEX")
     fi
 
     python "$ROOT/rollout_only.py" "${cmd_args[@]}"
