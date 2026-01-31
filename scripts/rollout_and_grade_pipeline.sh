@@ -3,10 +3,9 @@
 # Rollout and Grade Pipeline
 #
 # This script:
-# 1. Starts vLLM with Model A (rollout model)
-# 2. Generates rollouts using rollout_only.py
-# 3. Stops Model A, starts Model B (grading model)
-# 4. Grades rollouts using analyze_checklist.py with LLM-based checklist evaluation
+# 1. Generates rollouts using rollout_only.py (no vLLM server for Model A)
+# 2. Starts vLLM with Model B (grading model)
+# 3. Grades rollouts using analyze_checklist.py with LLM-based checklist evaluation
 #
 # Supports distributed processing via PARTITION_NUM and PARTITION_INDEX.
 #
@@ -104,20 +103,6 @@ echo "  Graded output: $GRADED_OUTPUT"
 # ============================================================================
 # Functions
 # ============================================================================
-
-start_vllm_model_a() {
-    echo "[INFO] Starting vLLM server with Model A..."
-    local cmd="vllm serve $MODEL_A \
-        --port $VLLM_PORT \
-        --tensor-parallel-size $GPU_NUM \
-        --gpu_memory_utilization $GPU_MEM \
-        $MODEL_A_EXTRA_ARGS"
-
-    echo "[INFO] Command: $cmd"
-    eval "$cmd" > "$VLLM_LOG_A" 2>&1 &
-    VLLM_PID=$!
-    echo "[INFO] vLLM Model A PID=$VLLM_PID"
-}
 
 start_vllm_model_b() {
     echo "[INFO] Starting vLLM server with Model B..."
@@ -247,10 +232,7 @@ if [[ -f "$ROLLOUT_OUTPUT" ]]; then
     echo "[INFO] Skipping rollout generation (delete file to regenerate)"
 else
     # Step 1: Generate rollouts with Model A
-    start_vllm_model_a
-    wait_for_vllm "$VLLM_LOG_A"
     run_rollout
-    stop_vllm
 fi
 
 # Step 2: Grade rollouts with Model B
