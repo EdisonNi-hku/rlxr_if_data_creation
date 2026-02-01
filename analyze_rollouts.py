@@ -7,8 +7,8 @@ Two modes:
 2. Grade and analyze raw rollouts (from rollout_only.py) with a dataset
 
 Computes core metrics:
-- best@k (best score among first k rollouts)
-- pass@k (at least one pass among first k rollouts)
+- Best soft reward among the first k rollouts
+- Any non-zero hard reward among the first k rollouts
 - Overall pass rate and constraint accuracy
 - Count of rows with all scores = 1 (perfect)
 - Count of rows with all scores = 0 (all failed)
@@ -93,11 +93,11 @@ def best_of_k(scores: list[float], k: int) -> float:
     return max(scores[:k])
 
 
-def pass_at_k(scores: list[float], k: int, threshold: float = 1.0) -> bool:
-    """Check if at least one of the first k rollouts passes (score >= threshold)."""
-    if not scores:
+def nonzero_hard_reward_at_k(hard_rewards: list[int], k: int) -> bool:
+    """Check if any of the first k rollouts has non-zero hard reward."""
+    if not hard_rewards:
         return False
-    return any(s >= threshold for s in scores[:k])
+    return any(r > 0 for r in hard_rewards[:k])
 
 
 def compute_advantages(scores: list[float], epsilon: float = 1e-8) -> list[float]:
@@ -235,10 +235,10 @@ def grade_rollouts(
         n = len(responses)
         scores = [r["score"] for r in rollout_results]
 
-        # Compute best@k metrics
-        best_at_1 = best_of_k(scores, 1)
-        best_at_8 = best_of_k(scores, min(8, n))
-        best_at_16 = best_of_k(scores, n)
+        # Compute best soft reward metrics
+        best_soft_reward_at_1 = best_of_k(scores, 1)
+        best_soft_reward_at_8 = best_of_k(scores, min(8, n))
+        best_soft_reward_at_16 = best_of_k(scores, n)
 
         # Compute advantages
         advantages = compute_advantages(scores)
@@ -248,16 +248,16 @@ def grade_rollouts(
             "instruction": instruction,
             "ground_truth": ground_truth,
             "responses": [r["response"] for r in rollout_results],
-            "scores": scores,
-            "advantages": advantages,
-            "num_rollouts": n,
+        "scores": scores,
+        "advantages": advantages,
+        "num_rollouts": n,
             "num_passed": num_passed,
             "pass_rate": num_passed / n if n > 0 else 0.0,
-            "best_at_1": best_at_1,
-            "best_at_8": best_at_8,
-            "best_at_16": best_at_16,
-            "rollouts": rollout_results,
-            "constraint_accuracy": sum(all_constraint_results) / len(all_constraint_results) if all_constraint_results else 0.0,
+        "best_soft_reward_at_1": best_soft_reward_at_1,
+        "best_soft_reward_at_8": best_soft_reward_at_8,
+        "best_soft_reward_at_16": best_soft_reward_at_16,
+        "rollouts": rollout_results,
+        "constraint_accuracy": sum(all_constraint_results) / len(all_constraint_results) if all_constraint_results else 0.0,
         }
         results.append(result)
 
@@ -283,8 +283,8 @@ def analyze(results: list[dict], k_values: list[int] = None):
     total_constraints = 0
     total_constraints_passed = 0
 
-    best_at_k = defaultdict(float)
-    pass_at_k_count = defaultdict(int)
+    best_soft_reward_by_k = defaultdict(float)
+    nonzero_hard_reward_by_k_count = defaultdict(int)
 
     all_perfect = 0  # All scores = 1
     all_failed = 0   # All scores = 0
@@ -307,12 +307,19 @@ def analyze(results: list[dict], k_values: list[int] = None):
                 total_constraints += len(constraint_results)
                 total_constraints_passed += sum(constraint_results)
 
-        # best@k and pass@k
+        hard_rewards = []
+        if "rollouts" in result:
+            for rollout in result["rollouts"]:
+                hard_rewards.append(1 if rollout.get("passed") else 0)
+        else:
+            hard_rewards = [1 if s >= 1.0 else 0 for s in scores]
+
+        # Best soft reward and non-zero hard reward among first k rollouts
         for k in k_values:
             actual_k = min(k, n)
-            best_at_k[k] += best_of_k(scores, actual_k)
-            if pass_at_k(scores, actual_k):
-                pass_at_k_count[k] += 1
+            best_soft_reward_by_k[k] += best_of_k(scores, actual_k)
+            if nonzero_hard_reward_at_k(hard_rewards, actual_k):
+                nonzero_hard_reward_at_k_count[k] += 1
 
         # Count perfect and all-failed
         if all(s >= 1.0 for s in scores):
@@ -338,16 +345,16 @@ def analyze(results: list[dict], k_values: list[int] = None):
         print(f"Constraint accuracy: {total_constraints_passed / total_constraints:.2%}")
 
     print("-" * 60)
-    print("Best@k (average best score among first k rollouts):")
+    print("Best soft reward (average best score among first k rollouts):")
     for k in k_values:
-        avg = best_at_k[k] / total if total > 0 else 0
-        print(f"  best@{k}: {avg:.2%}")
+        avg = best_soft_reward_by_k[k] / total if total > 0 else 0
+        print(f"  k={k}: {avg:.2%}")
 
     print("-" * 60)
-    print("Pass@k (fraction with at least one perfect score in first k):")
+    print("Non-zero hard reward (fraction with any hard reward > 0 in first k):")
     for k in k_values:
-        rate = pass_at_k_count[k] / total if total > 0 else 0
-        print(f"  pass@{k}: {rate:.2%} ({pass_at_k_count[k]}/{total})")
+        rate = nonzero_hard_reward_at_k_count[k] / total if total > 0 else 0
+        print(f"  k={k}: {rate:.2%} ({nonzero_hard_reward_at_k_count[k]}/{total})")
 
     print("-" * 60)
     print("Score distribution:")
@@ -363,8 +370,8 @@ def analyze(results: list[dict], k_values: list[int] = None):
         "total_rollouts": total_rollouts,
         "total_passed": total_passed,
         "overall_pass_rate": total_passed / total_rollouts if total_rollouts > 0 else 0,
-        "best_at_k": {k: best_at_k[k] / total for k in k_values},
-        "pass_at_k": {k: pass_at_k_count[k] / total for k in k_values},
+        "best_soft_reward_by_k": {k: best_soft_reward_by_k[k] / total for k in k_values},
+        "nonzero_hard_reward_by_k": {k: nonzero_hard_reward_at_k_count[k] / total for k in k_values},
         "all_perfect": all_perfect,
         "all_failed": all_failed,
         "all_identical_partial": all_identical_partial,
@@ -377,26 +384,41 @@ def save_dataset_with_scores(
     results: list[dict],
     output_path: str,
 ) -> None:
-    """Append scores and variance to the dataset and save to disk."""
+    """Append rewards and variance to the dataset and save to disk."""
     dataset = build_dataset(dataset_path, split, streaming=False)
     dataset_name = os.path.basename(dataset_path).replace("/", "_")
 
     score_map = {}
     variance_map = {}
+    soft_rewards_map = {}
+    hard_rewards_map = {}
     for result in results:
         scores = result.get("scores", [])
         score_map[result["key"]] = scores
         variance_map[result["key"]] = 1 if len(set(scores)) > 1 else 0
+        soft_rewards_map[result["key"]] = scores
+        if "rollouts" in result:
+            hard_rewards_map[result["key"]] = [
+                1 if rollout.get("passed") else 0 for rollout in result["rollouts"]
+            ]
+        else:
+            hard_rewards_map[result["key"]] = [1 if s >= 1.0 else 0 for s in scores]
 
     scores_column = []
     variance_column = []
+    soft_rewards_column = []
+    hard_rewards_column = []
     for index, example in enumerate(tqdm(dataset, desc="Appending scores")):
         key = get_example_key(example, index, dataset_name)
         scores = score_map.get(key, [])
         scores_column.append(scores)
         variance_column.append(variance_map.get(key, 0))
+        soft_rewards_column.append(soft_rewards_map.get(key, []))
+        hard_rewards_column.append(hard_rewards_map.get(key, []))
 
     dataset = dataset.add_column("scores", scores_column)
+    dataset = dataset.add_column("soft_rewards", soft_rewards_column)
+    dataset = dataset.add_column("hard_rewards", hard_rewards_column)
     dataset = dataset.add_column("verifiable_has_variance", variance_column)
     dataset.save_to_disk(output_path)
 
@@ -425,7 +447,7 @@ def main():
         type=int,
         nargs="+",
         default=[1, 2, 4, 8, 16],
-        help="Values of k for best@k and pass@k metrics.",
+        help="Values of k for best soft reward and non-zero hard reward metrics.",
     )
     parser.add_argument(
         "--output",

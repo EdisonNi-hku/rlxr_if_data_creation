@@ -138,8 +138,8 @@ def best_of_k(scores: list[float], k: int) -> float:
     return max(scores[:k])
 
 
-def pass_at_k(scores: list[float], k: int, threshold: float = 1.0) -> bool:
-    """Check if at least one of the first k rollouts passes."""
+def nonzero_hard_reward_at_k(scores: list[float], k: int, threshold: float = 1.0) -> bool:
+    """Check if any of the first k rollouts has non-zero hard reward."""
     if not scores:
         return False
     return any(s >= threshold for s in scores[:k])
@@ -352,9 +352,9 @@ def grade_rollouts(
 
         # Compute metrics
         num_passed = sum(1 for s in scores if s >= 1.0)
-        best_at_1 = best_of_k(scores, 1)
-        best_at_8 = best_of_k(scores, min(8, n))
-        best_at_16 = best_of_k(scores, n)
+        best_soft_reward_at_1 = best_of_k(scores, 1)
+        best_soft_reward_at_8 = best_of_k(scores, min(8, n))
+        best_soft_reward_at_16 = best_of_k(scores, n)
         advantages = compute_advantages(scores)
 
         # Flatten all individual scores for constraint accuracy
@@ -372,9 +372,9 @@ def grade_rollouts(
             "num_rollouts": n,
             "num_passed": num_passed,
             "pass_rate": num_passed / n if n > 0 else 0.0,
-            "best_at_1": best_at_1,
-            "best_at_8": best_at_8,
-            "best_at_16": best_at_16,
+            "best_soft_reward_at_1": best_soft_reward_at_1,
+            "best_soft_reward_at_8": best_soft_reward_at_8,
+            "best_soft_reward_at_16": best_soft_reward_at_16,
             "individual_scores": result["individual_scores"],
             "grader_outputs": result["grader_outputs"],
             "constraint_accuracy": sum(all_constraint_results) / len(all_constraint_results) if all_constraint_results else 0.0,
@@ -400,8 +400,8 @@ def analyze(results: list[dict], k_values: list[int] = None):
     total_constraints = 0
     total_constraints_passed = 0
 
-    best_at_k = defaultdict(float)
-    pass_at_k_count = defaultdict(int)
+    best_soft_reward_by_k = defaultdict(float)
+    nonzero_hard_reward_by_k_count = defaultdict(int)
 
     all_perfect = 0  # All scores = 1
     all_failed = 0   # All scores = 0
@@ -423,12 +423,12 @@ def analyze(results: list[dict], k_values: list[int] = None):
                 total_constraints += len(ind_scores)
                 total_constraints_passed += sum(ind_scores)
 
-        # best@k and pass@k
+        # Best soft reward and non-zero hard reward among first k rollouts
         for k in k_values:
             actual_k = min(k, n)
-            best_at_k[k] += best_of_k(scores, actual_k)
-            if pass_at_k(scores, actual_k):
-                pass_at_k_count[k] += 1
+            best_soft_reward_by_k[k] += best_of_k(scores, actual_k)
+            if nonzero_hard_reward_at_k(scores, actual_k):
+                nonzero_hard_reward_by_k_count[k] += 1
 
         # Count perfect and all-failed
         if all(s >= 1.0 for s in scores):
@@ -453,16 +453,16 @@ def analyze(results: list[dict], k_values: list[int] = None):
         print(f"Checklist item accuracy: {total_constraints_passed / total_constraints:.2%}")
 
     print("-" * 60)
-    print("Best@k (average best score among first k rollouts):")
+    print("Best soft reward (average best score among first k rollouts):")
     for k in k_values:
-        avg = best_at_k[k] / total if total > 0 else 0
-        print(f"  best@{k}: {avg:.2%}")
+        avg = best_soft_reward_by_k[k] / total if total > 0 else 0
+        print(f"  k={k}: {avg:.2%}")
 
     print("-" * 60)
-    print("Pass@k (fraction with at least one perfect score in first k):")
+    print("Non-zero hard reward (fraction with any hard reward > 0 in first k):")
     for k in k_values:
-        rate = pass_at_k_count[k] / total if total > 0 else 0
-        print(f"  pass@{k}: {rate:.2%} ({pass_at_k_count[k]}/{total})")
+        rate = nonzero_hard_reward_by_k_count[k] / total if total > 0 else 0
+        print(f"  k={k}: {rate:.2%} ({nonzero_hard_reward_by_k_count[k]}/{total})")
 
     print("-" * 60)
     print("Score distribution:")
@@ -478,8 +478,8 @@ def analyze(results: list[dict], k_values: list[int] = None):
         "total_rollouts": total_rollouts,
         "total_passed": total_passed,
         "overall_pass_rate": total_passed / total_rollouts if total_rollouts > 0 else 0,
-        "best_at_k": {k: best_at_k[k] / total for k in k_values},
-        "pass_at_k": {k: pass_at_k_count[k] / total for k in k_values},
+        "best_soft_reward_by_k": {k: best_soft_reward_by_k[k] / total for k in k_values},
+        "nonzero_hard_reward_by_k": {k: nonzero_hard_reward_by_k_count[k] / total for k in k_values},
         "all_perfect": all_perfect,
         "all_failed": all_failed,
         "all_identical_partial": all_identical_partial,
@@ -506,7 +506,7 @@ def main():
         type=int,
         nargs="+",
         default=[1, 2, 4, 8, 16],
-        help="Values of k for best@k and pass@k metrics.",
+        help="Values of k for best soft reward and non-zero hard reward metrics.",
     )
     parser.add_argument(
         "--output",
