@@ -214,8 +214,6 @@ def main() -> None:
     hard_all_one = 0
     soft_rewards_column_data = []
     hard_rewards_column_data = []
-    responses_column_data = []
-    scores_column_data = []
 
     for index, example in enumerate(tqdm(dataset, desc="Computing variance")):
         total_rows += 1
@@ -225,28 +223,19 @@ def main() -> None:
             missing_results += 1
             soft_rewards_column_data.append([])
             hard_rewards_column_data.append([])
-            responses_column_data.append([])
-            scores_column_data.append([])
             continue
 
         soft_rewards = compute_soft_rewards(result)
         hard_rewards = compute_hard_rewards(result)
-        responses = result.get("responses", [])
-        scores = result.get("scores", [])
-        
         if not soft_rewards and not hard_rewards:
             missing_results += 1
             soft_rewards_column_data.append([])
             hard_rewards_column_data.append([])
-            responses_column_data.append([])
-            scores_column_data.append([])
             continue
 
         rows_with_results += 1
         soft_rewards_column_data.append(soft_rewards)
         hard_rewards_column_data.append(hard_rewards)
-        responses_column_data.append(responses)
-        scores_column_data.append(scores)
 
         soft_var = variance(soft_rewards)
         hard_var = variance([float(v) for v in hard_rewards])
@@ -291,14 +280,10 @@ def main() -> None:
     print("=" * 60)
 
     if args.save_dataset:
-        dataset = dataset.add_column("responses", responses_column_data)
-        dataset = dataset.add_column("scores", scores_column_data)
         dataset = dataset.add_column(args.soft_rewards_column, soft_rewards_column_data)
         dataset = dataset.add_column(args.hard_rewards_column, hard_rewards_column_data)
         dataset.save_to_disk(args.save_dataset)
         print(f"\nDataset with rewards saved to: {args.save_dataset}")
-        print(f"  Responses column: responses")
-        print(f"  Scores column: scores")
         print(f"  Soft rewards column: {args.soft_rewards_column}")
         print(f"  Hard rewards column: {args.hard_rewards_column}")
 
