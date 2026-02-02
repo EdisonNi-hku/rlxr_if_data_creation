@@ -541,7 +541,13 @@ def main():
     parser.add_argument(
         "--strip_thinking",
         action="store_true",
-        help="Strip thinking tokens (</think>) from responses before grading.",
+        default=True,
+        help="Strip thinking tokens (</think>) from responses before grading (default: True).",
+    )
+    parser.add_argument(
+        "--no_strip_thinking",
+        action="store_true",
+        help="Disable stripping thinking tokens from responses.",
     )
     parser.add_argument(
         "--save_graded",
@@ -601,6 +607,10 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # Handle --no_strip_thinking flag
+    if args.no_strip_thinking:
+        args.strip_thinking = False
 
     if args.grade and not args.checklist_dataset:
         parser.error("--checklist_dataset is required when using --grade")

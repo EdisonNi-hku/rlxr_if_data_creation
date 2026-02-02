@@ -2,9 +2,10 @@
 """
 Analyze and optionally grade rollout results.
 
-Two modes:
+Three modes:
 1. Analyze pre-graded results (from rollout_and_verify.py)
 2. Grade and analyze raw rollouts (from rollout_only.py) with a dataset
+3. Grade verifiable constraints from a checklist-graded dataset
 
 Computes core metrics:
 - Best soft reward among the first k rollouts
@@ -20,6 +21,9 @@ Example usage:
 
     # Grade and analyze raw rollouts
     python analyze_rollouts.py --input rollouts.jsonl --dataset data.jsonl --grade
+
+    # Grade verifiable constraints from checklist-graded dataset
+    python analyze_rollouts.py --grade_verifiable --dataset graded_dataset
 """
 
 from __future__ import annotations
@@ -319,7 +323,7 @@ def analyze(results: list[dict], k_values: list[int] = None):
             actual_k = min(k, n)
             best_soft_reward_by_k[k] += best_of_k(scores, actual_k)
             if nonzero_hard_reward_at_k(hard_rewards, actual_k):
-                nonzero_hard_reward_at_k_count[k] += 1
+                nonzero_hard_reward_by_k_count[k] += 1
 
         # Count perfect and all-failed
         if all(s >= 1.0 for s in scores):
@@ -353,8 +357,8 @@ def analyze(results: list[dict], k_values: list[int] = None):
     print("-" * 60)
     print("Non-zero hard reward (fraction with any hard reward > 0 in first k):")
     for k in k_values:
-        rate = nonzero_hard_reward_at_k_count[k] / total if total > 0 else 0
-        print(f"  k={k}: {rate:.2%} ({nonzero_hard_reward_at_k_count[k]}/{total})")
+        rate = nonzero_hard_reward_by_k_count[k] / total if total > 0 else 0
+        print(f"  k={k}: {rate:.2%} ({nonzero_hard_reward_by_k_count[k]}/{total})")
 
     print("-" * 60)
     print("Score distribution:")
@@ -371,11 +375,125 @@ def analyze(results: list[dict], k_values: list[int] = None):
         "total_passed": total_passed,
         "overall_pass_rate": total_passed / total_rollouts if total_rollouts > 0 else 0,
         "best_soft_reward_by_k": {k: best_soft_reward_by_k[k] / total for k in k_values},
-        "nonzero_hard_reward_by_k": {k: nonzero_hard_reward_at_k_count[k] / total for k in k_values},
+        "nonzero_hard_reward_by_k": {k: nonzero_hard_reward_by_k_count[k] / total for k in k_values},
         "all_perfect": all_perfect,
         "all_failed": all_failed,
         "all_identical_partial": all_identical_partial,
     }
+
+
+def extract_responses_from_messages(messages: list[dict]) -> list[str]:
+    """Extract assistant responses from messages."""
+    responses = []
+    for msg in messages:
+        if msg.get("role") == "assistant":
+            responses.append(msg.get("content", ""))
+    return responses
+
+
+def grade_verifiable_from_dataset(
+    dataset_path: str,
+    split: str,
+    strip_thinking: bool,
+    responses_column: str | None = None,
+    messages_column: str = "messages_verifiable",
+) -> list[dict]:
+    """Grade verifiable constraints directly from a dataset.
+    
+    The dataset should have:
+    - ground_truth_verifiable: the verifiable constraints to check against
+    - Either a responses column or messages column to extract responses from
+    """
+    print(f"Loading dataset: {dataset_path}")
+    dataset = build_dataset(dataset_path, split, streaming=False)
+    dataset_name = os.path.basename(dataset_path).replace("/", "_")
+
+    results = []
+    skipped = 0
+
+    for index, example in enumerate(tqdm(dataset, desc="Grading verifiable constraints")):
+        key = get_example_key(example, index, dataset_name)
+        
+        # Get ground truth verifiable constraints
+        ground_truth = get_ground_truth(example)
+        if ground_truth is None:
+            skipped += 1
+            continue
+
+        # Get responses - either from a responses column or from messages
+        responses = []
+        if responses_column and responses_column in example:
+            responses = example[responses_column]
+            if isinstance(responses, str):
+                responses = [responses]
+        elif messages_column and messages_column in example:
+            messages = example[messages_column]
+            if messages:
+                responses = extract_responses_from_messages(messages)
+        
+        if not responses:
+            skipped += 1
+            continue
+
+        # Optionally strip thinking tokens
+        if strip_thinking:
+            clean_responses = []
+            for resp in responses:
+                if '</think>' in resp:
+                    resp = resp.split('</think>')[-1].strip()
+                clean_responses.append(resp)
+            responses = clean_responses
+
+        # Verify responses
+        rollout_results, num_passed, all_constraint_results = verify_responses(
+            responses, ground_truth
+        )
+
+        n = len(responses)
+        scores = [r["score"] for r in rollout_results]
+
+        # Compute best soft reward metrics
+        best_soft_reward_at_1 = best_of_k(scores, 1)
+        best_soft_reward_at_8 = best_of_k(scores, min(8, n))
+        best_soft_reward_at_16 = best_of_k(scores, n)
+
+        # Compute advantages
+        advantages = compute_advantages(scores)
+
+        # Get instruction
+        instruction = ""
+        if "augmented_prompt" in example:
+            instruction = example["augmented_prompt"]
+        elif "instruction" in example:
+            instruction = example["instruction"]
+        elif messages_column in example and example[messages_column]:
+            for msg in example[messages_column]:
+                if msg.get("role") == "user":
+                    instruction = msg.get("content", "")
+                    break
+
+        result = {
+            "key": key,
+            "instruction": instruction,
+            "ground_truth": ground_truth,
+            "responses": [r["response"] for r in rollout_results],
+            "scores": scores,
+            "advantages": advantages,
+            "num_rollouts": n,
+            "num_passed": num_passed,
+            "pass_rate": num_passed / n if n > 0 else 0.0,
+            "best_soft_reward_at_1": best_soft_reward_at_1,
+            "best_soft_reward_at_8": best_soft_reward_at_8,
+            "best_soft_reward_at_16": best_soft_reward_at_16,
+            "rollouts": rollout_results,
+            "constraint_accuracy": sum(all_constraint_results) / len(all_constraint_results) if all_constraint_results else 0.0,
+        }
+        results.append(result)
+
+    if skipped > 0:
+        print(f"Skipped {skipped} examples (no ground truth or responses found).")
+
+    return results
 
 
 def save_dataset_with_scores(
@@ -432,8 +550,9 @@ def main():
     parser = argparse.ArgumentParser(description="Analyze and optionally grade rollout results.")
     parser.add_argument(
         "--input",
-        required=True,
-        help="Path to input JSONL file or HuggingFace dataset directory.",
+        required=False,
+        default=None,
+        help="Path to input JSONL file or HuggingFace dataset directory (not required for --grade_verifiable).",
     )
     parser.add_argument(
         "--partition_num",
@@ -468,10 +587,15 @@ def main():
         help="Grade raw rollouts (requires --dataset).",
     )
     parser.add_argument(
+        "--grade_verifiable",
+        action="store_true",
+        help="Grade verifiable constraints from a checklist-graded dataset (requires --dataset).",
+    )
+    parser.add_argument(
         "--dataset",
         type=str,
         default=None,
-        help="Dataset with ground_truth constraints (required for --grade).",
+        help="Dataset with ground_truth constraints (required for --grade or --grade_verifiable).",
     )
     parser.add_argument(
         "--split",
@@ -481,7 +605,25 @@ def main():
     parser.add_argument(
         "--strip_thinking",
         action="store_true",
-        help="Strip thinking tokens (</think>) from responses before grading.",
+        default=True,
+        help="Strip thinking tokens (</think>) from responses before grading (default: True).",
+    )
+    parser.add_argument(
+        "--no_strip_thinking",
+        action="store_true",
+        help="Disable stripping thinking tokens from responses.",
+    )
+    parser.add_argument(
+        "--responses_column",
+        type=str,
+        default=None,
+        help="Column name containing responses (for --grade_verifiable).",
+    )
+    parser.add_argument(
+        "--messages_column",
+        type=str,
+        default="messages_verifiable",
+        help="Column name containing messages to extract responses from (default: messages_verifiable).",
     )
     parser.add_argument(
         "--save_graded",
@@ -524,8 +666,21 @@ def main():
 
     args = parser.parse_args()
 
+    # Handle --no_strip_thinking flag
+    if args.no_strip_thinking:
+        args.strip_thinking = False
+
     if args.grade and not args.dataset:
         parser.error("--dataset is required when using --grade")
+
+    if args.grade_verifiable and not args.dataset:
+        parser.error("--dataset is required when using --grade_verifiable")
+
+    if args.grade and args.grade_verifiable:
+        parser.error("Cannot use both --grade and --grade_verifiable")
+
+    if not args.grade_verifiable and not args.input:
+        parser.error("--input is required unless using --grade_verifiable")
 
     if args.partition_num < 1:
         parser.error("--partition_num must be >= 1")
@@ -533,6 +688,52 @@ def main():
     if args.partition_num > 1 and args.format != "jsonl":
         parser.error("--partition_num is only supported with --format jsonl")
 
+    # Mode 3: Grade verifiable constraints from a checklist-graded dataset
+    if args.grade_verifiable:
+        results = grade_verifiable_from_dataset(
+            args.dataset,
+            args.split,
+            args.strip_thinking,
+            responses_column=args.responses_column,
+            messages_column=args.messages_column,
+        )
+        print(f"Graded {len(results)} results for verifiable constraints.")
+
+        if args.save_graded:
+            with open(args.save_graded, "w", encoding="utf-8") as f:
+                for result in results:
+                    f.write(json.dumps(result, ensure_ascii=False) + "\n")
+            print(f"Graded results saved to: {args.save_graded}")
+
+        output_path = args.save_dataset
+        if output_path is None:
+            if os.path.isdir(args.dataset):
+                output_path = f"{args.dataset}_with_verifiable_scores"
+            else:
+                output_path = f"{os.path.basename(args.dataset)}_with_verifiable_scores"
+
+        save_dataset_with_scores(
+            args.dataset,
+            args.split,
+            results,
+            output_path,
+            scores_col=args.scores_column,
+            soft_rewards_col=args.soft_rewards_column,
+            hard_rewards_col=args.hard_rewards_column,
+            variance_col=args.variance_column,
+        )
+        print(f"Dataset with verifiable scores saved to: {output_path}")
+
+        metrics = analyze(results, args.k)
+
+        if args.output:
+            with open(args.output, "w", encoding="utf-8") as f:
+                json.dump(metrics, f, indent=2)
+            print(f"\nMetrics saved to: {args.output}")
+
+        return
+
+    # Mode 1 & 2: Load results from JSONL or disk
     if args.partition_num > 1:
         base_path = args.input
         input_paths = build_partition_paths(base_path, args.partition_num)
@@ -547,7 +748,7 @@ def main():
     results = load_results(input_paths, args.format)
     print(f"Loaded {len(results)} results.")
 
-    # Grade if requested
+    # Grade if requested (Mode 2)
     if args.grade:
         results = grade_rollouts(
             results,
