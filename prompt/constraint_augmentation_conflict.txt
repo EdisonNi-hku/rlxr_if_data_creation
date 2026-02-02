@@ -38,6 +38,7 @@ You may:
 6. **Output Format**
    - Output ONLY the rewritten prompt.
    - Do NOT include explanations, labels, or prefaces such as "Here is the modified prompt."
+   - Do NOT include closing phrases or suffices such as "Is there anything else I can help with?"
 
 [Constraint References]
 {reference_constraints}
