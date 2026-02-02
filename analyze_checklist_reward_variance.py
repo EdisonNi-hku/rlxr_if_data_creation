@@ -6,6 +6,8 @@ Soft reward for a response = average of checklist item scores.
 Hard reward for a response = 1 if all checklist items are 1, else 0.
 
 Prints the proportion of dataset rows with zero soft/hard reward variance.
+
+Supports merging multiple partitions before analysis.
 """
 
 from __future__ import annotations
@@ -66,6 +68,37 @@ def load_results(input_path: str, format: str):
     raise ValueError(f"Unknown format: {format}")
 
 
+def merge_partitions(base_name: str, partition_num: int, format: str) -> list[dict]:
+    """Merge results from multiple partition files.
+    
+    Args:
+        base_name: Base name of the partition files (e.g., 'rollouts_checklist_test')
+        partition_num: Total number of partitions
+        format: Format of the partition files ('jsonl' or 'disk')
+    
+    Returns:
+        Merged list of all results from all partitions
+    """
+    all_results = []
+    
+    for i in range(partition_num):
+        if format == "jsonl":
+            partition_path = f"{base_name}_p{i}_of_{partition_num}_graded.jsonl"
+        else:
+            partition_path = f"{base_name}_p{i}_of_{partition_num}_graded"
+        
+        if not os.path.exists(partition_path):
+            print(f"Warning: Partition file not found: {partition_path}")
+            continue
+        
+        print(f"Loading partition {i + 1}/{partition_num}: {partition_path}")
+        partition_results = load_results(partition_path, format)
+        all_results.extend(partition_results)
+        print(f"  Loaded {len(partition_results)} results from partition {i}")
+    
+    return all_results
+
+
 def variance(values: list[float]) -> float:
     """Population variance; returns 0 for empty or single-element lists."""
     n = len(values)
@@ -102,9 +135,15 @@ def main() -> None:
         description="Compute soft/hard reward variance from analyze_checklist.py output."
     )
     parser.add_argument(
-        "--input",
+        "--base_name",
         required=True,
-        help="Path to analyze_checklist.py output (JSONL or HF dataset).",
+        help="Base name for partition files (e.g., 'rollouts_checklist_test').",
+    )
+    parser.add_argument(
+        "--partition_num",
+        type=int,
+        required=True,
+        help="Total number of partitions to merge.",
     )
     parser.add_argument(
         "--format",
@@ -136,9 +175,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    print(f"Loading analyze_checklist results from: {args.input}")
-    results = load_results(args.input, args.format)
-    print(f"Loaded {len(results)} results.")
+    print(f"Merging {args.partition_num} partitions with base name: {args.base_name}")
+    results = merge_partitions(args.base_name, args.partition_num, args.format)
+    print(f"Loaded {len(results)} total results after merging.")
 
     print(f"Loading dataset: {args.dataset}")
     dataset = build_dataset(args.dataset, args.split, streaming=False)
