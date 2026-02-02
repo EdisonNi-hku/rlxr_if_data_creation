@@ -383,6 +383,10 @@ def save_dataset_with_scores(
     split: str,
     results: list[dict],
     output_path: str,
+    scores_col: str = "scores",
+    soft_rewards_col: str = "soft_rewards",
+    hard_rewards_col: str = "hard_rewards",
+    variance_col: str = "verifiable_has_variance",
 ) -> None:
     """Append rewards and variance to the dataset and save to disk."""
     dataset = build_dataset(dataset_path, split, streaming=False)
@@ -404,23 +408,24 @@ def save_dataset_with_scores(
         else:
             hard_rewards_map[result["key"]] = [1 if s >= 1.0 else 0 for s in scores]
 
-    scores_column = []
-    variance_column = []
-    soft_rewards_column = []
-    hard_rewards_column = []
+    scores_column_data = []
+    variance_column_data = []
+    soft_rewards_column_data = []
+    hard_rewards_column_data = []
     for index, example in enumerate(tqdm(dataset, desc="Appending scores")):
         key = get_example_key(example, index, dataset_name)
         scores = score_map.get(key, [])
-        scores_column.append(scores)
-        variance_column.append(variance_map.get(key, 0))
-        soft_rewards_column.append(soft_rewards_map.get(key, []))
-        hard_rewards_column.append(hard_rewards_map.get(key, []))
+        scores_column_data.append(scores)
+        variance_column_data.append(variance_map.get(key, 0))
+        soft_rewards_column_data.append(soft_rewards_map.get(key, []))
+        hard_rewards_column_data.append(hard_rewards_map.get(key, []))
 
-    dataset = dataset.add_column("scores", scores_column)
-    dataset = dataset.add_column("soft_rewards", soft_rewards_column)
-    dataset = dataset.add_column("hard_rewards", hard_rewards_column)
-    dataset = dataset.add_column("verifiable_has_variance", variance_column)
+    dataset = dataset.add_column(scores_col, scores_column_data)
+    dataset = dataset.add_column(soft_rewards_col, soft_rewards_column_data)
+    dataset = dataset.add_column(hard_rewards_col, hard_rewards_column_data)
+    dataset = dataset.add_column(variance_col, variance_column_data)
     dataset.save_to_disk(output_path)
+    print(f"  Columns: {scores_col}, {soft_rewards_col}, {hard_rewards_col}, {variance_col}")
 
 
 def main():
@@ -491,6 +496,32 @@ def main():
         help="Path to save the dataset with appended scores/variance.",
     )
 
+    # Column name customization
+    parser.add_argument(
+        "--scores_column",
+        type=str,
+        default="scores",
+        help="Column name for scores (default: scores).",
+    )
+    parser.add_argument(
+        "--soft_rewards_column",
+        type=str,
+        default="soft_rewards",
+        help="Column name for soft rewards (default: soft_rewards).",
+    )
+    parser.add_argument(
+        "--hard_rewards_column",
+        type=str,
+        default="hard_rewards",
+        help="Column name for hard rewards (default: hard_rewards).",
+    )
+    parser.add_argument(
+        "--variance_column",
+        type=str,
+        default="verifiable_has_variance",
+        help="Column name for variance indicator (default: verifiable_has_variance).",
+    )
+
     args = parser.parse_args()
 
     if args.grade and not args.dataset:
@@ -544,6 +575,10 @@ def main():
             args.split,
             results,
             output_path,
+            scores_col=args.scores_column,
+            soft_rewards_col=args.soft_rewards_column,
+            hard_rewards_col=args.hard_rewards_column,
+            variance_col=args.variance_column,
         )
         print(f"Dataset with scores saved to: {output_path}")
 

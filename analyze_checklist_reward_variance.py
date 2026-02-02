@@ -173,6 +173,18 @@ def main() -> None:
         default=None,
         help="Optional path to save the dataset with soft/hard rewards appended.",
     )
+    parser.add_argument(
+        "--soft_rewards_column",
+        type=str,
+        default="soft_rewards",
+        help="Column name for soft rewards (default: soft_rewards).",
+    )
+    parser.add_argument(
+        "--hard_rewards_column",
+        type=str,
+        default="hard_rewards",
+        help="Column name for hard rewards (default: hard_rewards).",
+    )
     args = parser.parse_args()
 
     print(f"Merging {args.partition_num} partitions with base name: {args.base_name}")
@@ -195,8 +207,13 @@ def main() -> None:
     missing_results = 0
     soft_zero_variance = 0
     hard_zero_variance = 0
-    soft_rewards_column = []
-    hard_rewards_column = []
+    # Distribution counters
+    soft_all_zero = 0
+    soft_all_one = 0
+    hard_all_zero = 0
+    hard_all_one = 0
+    soft_rewards_column_data = []
+    hard_rewards_column_data = []
 
     for index, example in enumerate(tqdm(dataset, desc="Computing variance")):
         total_rows += 1
@@ -204,21 +221,21 @@ def main() -> None:
         result = result_map.get(key)
         if result is None:
             missing_results += 1
-            soft_rewards_column.append([])
-            hard_rewards_column.append([])
+            soft_rewards_column_data.append([])
+            hard_rewards_column_data.append([])
             continue
 
         soft_rewards = compute_soft_rewards(result)
         hard_rewards = compute_hard_rewards(result)
         if not soft_rewards and not hard_rewards:
             missing_results += 1
-            soft_rewards_column.append([])
-            hard_rewards_column.append([])
+            soft_rewards_column_data.append([])
+            hard_rewards_column_data.append([])
             continue
 
         rows_with_results += 1
-        soft_rewards_column.append(soft_rewards)
-        hard_rewards_column.append(hard_rewards)
+        soft_rewards_column_data.append(soft_rewards)
+        hard_rewards_column_data.append(hard_rewards)
 
         soft_var = variance(soft_rewards)
         hard_var = variance([float(v) for v in hard_rewards])
@@ -227,6 +244,16 @@ def main() -> None:
             soft_zero_variance += 1
         if hard_var <= args.epsilon:
             hard_zero_variance += 1
+
+        # Track distribution: all-0 and all-1 rewards
+        if soft_rewards and all(s == 0.0 for s in soft_rewards):
+            soft_all_zero += 1
+        if soft_rewards and all(s == 1.0 for s in soft_rewards):
+            soft_all_one += 1
+        if hard_rewards and all(h == 0 for h in hard_rewards):
+            hard_all_zero += 1
+        if hard_rewards and all(h == 1 for h in hard_rewards):
+            hard_all_one += 1
 
     denom = rows_with_results if rows_with_results > 0 else 1
     print("\n" + "=" * 60)
@@ -243,11 +270,22 @@ def main() -> None:
     )
     print("=" * 60)
 
+    print("\n" + "=" * 60)
+    print("REWARD DISTRIBUTION")
+    print("=" * 60)
+    print(f"Soft rewards - all 0: {soft_all_zero} ({soft_all_zero / denom:.2%})")
+    print(f"Soft rewards - all 1: {soft_all_one} ({soft_all_one / denom:.2%})")
+    print(f"Hard rewards - all 0: {hard_all_zero} ({hard_all_zero / denom:.2%})")
+    print(f"Hard rewards - all 1: {hard_all_one} ({hard_all_one / denom:.2%})")
+    print("=" * 60)
+
     if args.save_dataset:
-        dataset = dataset.add_column("soft_rewards", soft_rewards_column)
-        dataset = dataset.add_column("hard_rewards", hard_rewards_column)
+        dataset = dataset.add_column(args.soft_rewards_column, soft_rewards_column_data)
+        dataset = dataset.add_column(args.hard_rewards_column, hard_rewards_column_data)
         dataset.save_to_disk(args.save_dataset)
         print(f"\nDataset with rewards saved to: {args.save_dataset}")
+        print(f"  Soft rewards column: {args.soft_rewards_column}")
+        print(f"  Hard rewards column: {args.hard_rewards_column}")
 
 
 if __name__ == "__main__":
