@@ -71,7 +71,7 @@ STRIP_THINKING=${STRIP_THINKING:-true}
 # Grading configuration
 COLUMN_NAME=${COLUMN_NAME:-"pass_rate"}
 REWARD_MODEL=${REWARD_MODEL:-""}
-REWARD_BATCH_SIZE=${REWARD_BATCH_SIZE:-8}
+REWARD_BATCH_SIZE=${REWARD_BATCH_SIZE:-64}
 REWARD_DEVICE=${REWARD_DEVICE:-"cuda:0"}
 PUSH_TO_HUB=${PUSH_TO_HUB:-""}
 
@@ -93,6 +93,7 @@ fi
 # Output paths
 ROLLOUT_OUTPUT_ARG="$OUTPUT_DIR/${OUTPUT_NAME_BASE}.jsonl"
 ROLLOUT_OUTPUT="$OUTPUT_DIR/${OUTPUT_NAME_BASE}${PARTITION_SUFFIX}.jsonl"
+ROLLOUT_OUTPUT_PRIMUS="$PRIMUS_OUTPUT_DIR/${OUTPUT_NAME_BASE}${PARTITION_SUFFIX}.jsonl"
 GRADED_OUTPUT="$OUTPUT_DIR/${OUTPUT_NAME_BASE}${PARTITION_SUFFIX}_graded"
 GRADED_JSONL="$OUTPUT_DIR/${OUTPUT_NAME_BASE}${PARTITION_SUFFIX}_graded.jsonl"
 
@@ -161,6 +162,13 @@ else
     echo "[DONE] Rollout generation complete: $ROLLOUT_OUTPUT"
 fi
 
+# Always persist rollouts to PRIMUS_OUTPUT_DIR before grading
+if [[ "$ROLLOUT_OUTPUT" != "$ROLLOUT_OUTPUT_PRIMUS" ]]; then
+    echo "[INFO] Saving rollouts to PRIMUS_OUTPUT_DIR: $ROLLOUT_OUTPUT_PRIMUS"
+    mkdir -p "$PRIMUS_OUTPUT_DIR"
+    cp -r "$ROLLOUT_OUTPUT" "$ROLLOUT_OUTPUT_PRIMUS" 2>/dev/null || true
+fi
+
 # ============================================================================
 # Step 2: Grade with constraint verification (+ optional reward model)
 # ============================================================================
@@ -187,6 +195,8 @@ else
 fi
 
 if [[ -n "$REWARD_MODEL" ]]; then
+    # Always shard reward model across all GPUs
+    REWARD_DEVICE="auto"
     GRADE_ARGS+=(
         --reward_model "$REWARD_MODEL"
         --reward_batch_size "$REWARD_BATCH_SIZE"

@@ -190,14 +190,51 @@ def score_with_reward_model(
     import torch
     from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
+    def parse_reward_devices(device_arg: str) -> tuple[str, list[int]]:
+        if device_arg == "auto":
+            return "auto", []
+        parts = [p.strip() for p in device_arg.split(",") if p.strip()]
+        if len(parts) <= 1:
+            return device_arg, []
+        device_ids: list[int] = []
+        for p in parts:
+            if not p.startswith("cuda:"):
+                raise ValueError(
+                    f"Invalid reward_device entry '{p}'. Use 'cuda:N' or 'auto'."
+                )
+            device_ids.append(int(p.split("cuda:")[1]))
+        return "data_parallel", device_ids
+
+    device_mode, device_ids = parse_reward_devices(device)
+
     print(f"\nLoading reward model: {model_name}")
-    rm = AutoModelForSequenceClassification.from_pretrained(
-        model_name,
-        torch_dtype=torch.bfloat16,
-        device_map=device,
-        attn_implementation="flash_attention_2",
-        num_labels=1,
-    )
+    if device_mode == "auto":
+        rm = AutoModelForSequenceClassification.from_pretrained(
+            model_name,
+            torch_dtype=torch.bfloat16,
+            device_map="auto",
+            attn_implementation="flash_attention_2",
+            num_labels=1,
+        )
+        input_device = next(rm.parameters()).device
+    else:
+        rm = AutoModelForSequenceClassification.from_pretrained(
+            model_name,
+            torch_dtype=torch.bfloat16,
+            device_map=None,
+            attn_implementation="flash_attention_2",
+            num_labels=1,
+        )
+        if device_mode == "data_parallel":
+            if not device_ids:
+                raise ValueError("No valid CUDA devices provided for data parallel.")
+            primary_device = f"cuda:{device_ids[0]}"
+            rm.to(primary_device)
+            rm = torch.nn.DataParallel(rm, device_ids=device_ids)
+            input_device = torch.device(primary_device)
+        else:
+            rm.to(device)
+            input_device = torch.device(device)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     rm.eval()
 
@@ -237,7 +274,7 @@ def score_with_reward_model(
             padding=True,
             truncation=True,
             max_length=tokenizer.model_max_length,
-        ).to(device)
+        ).to(input_device)
         with torch.no_grad():
             logits = rm(**inputs).logits
         batch_scores = logits[:, 0].float().cpu().tolist()
@@ -318,7 +355,11 @@ def main():
         "--reward_device",
         type=str,
         default="cuda:0",
-        help="Device for reward model (default: cuda:0).",
+        help=(
+            "Device(s) for reward model. Use a single device like 'cuda:0', "
+            "'cpu', 'auto' to shard across GPUs, or a comma-separated list "
+            "like 'cuda:0,cuda:1' for data parallel (default: cuda:0)."
+        ),
     )
     parser.add_argument(
         "--push_to_hub",
