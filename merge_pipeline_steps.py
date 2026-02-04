@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Merge datasets from 3 pipeline steps (augmented, filtered, checklist) by their keys."""
+"""Merge datasets from pipeline steps (augmented, filtered, checklist) by their keys."""
 
 from __future__ import annotations
 
@@ -74,7 +74,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--filtered",
-        required=True,
+        default=None,
         help="Path or HuggingFace repo for the filtered dataset (contradiction check results).",
     )
     parser.add_argument(
@@ -117,6 +117,21 @@ def main() -> None:
         action="store_true",
         help="If set, exclude rows where contradiction_label is 'Contradictory'.",
     )
+    parser.add_argument(
+        "--split_by_raw_instruction",
+        action="store_true",
+        help="If set, split merged output into empty-raw_instruction and non-empty partitions.",
+    )
+    parser.add_argument(
+        "--empty_raw_instruction_value",
+        default="<EMPTY>",
+        help="Raw instruction value treated as empty for splitting (default: '<EMPTY>').",
+    )
+    parser.add_argument(
+        "--empty_suffix",
+        default="",
+        help="Suffix for the empty-raw_instruction output (default: '').",
+    )
     args = parser.parse_args()
 
     if not args.save_to_disk and not args.push_to_hub:
@@ -124,15 +139,25 @@ def main() -> None:
 
     filtered_fields = [f.strip() for f in args.filtered_fields.split(",") if f.strip()]
     checklist_fields = [f.strip() for f in args.checklist_fields.split(",") if f.strip()]
+    conflict_mode = args.filtered is None
+    if conflict_mode:
+        filtered_fields = []
+        if args.filter_contradictory:
+            parser.error("--filter_contradictory requires --filtered.")
+        if not args.split_by_raw_instruction:
+            args.split_by_raw_instruction = True
+            print("[INFO] No --filtered provided; enabling --split_by_raw_instruction.")
 
     # Load datasets
     print(f"[LOAD] Loading augmented dataset: {args.augmented}")
     augmented_ds = load_dataset_auto(args.augmented, args.split)
     print(f"  -> {len(augmented_ds)} samples")
 
-    print(f"[LOAD] Loading filtered dataset: {args.filtered}")
-    filtered_ds = load_dataset_auto(args.filtered, args.split)
-    print(f"  -> {len(filtered_ds)} samples")
+    filtered_ds = None
+    if args.filtered:
+        print(f"[LOAD] Loading filtered dataset: {args.filtered}")
+        filtered_ds = load_dataset_auto(args.filtered, args.split)
+        print(f"  -> {len(filtered_ds)} samples")
 
     print(f"[LOAD] Loading checklist dataset: {args.checklist}")
     checklist_ds = load_dataset_auto(args.checklist, args.split)
@@ -140,8 +165,10 @@ def main() -> None:
 
     # Build key maps
     print("\n[INDEX] Building key maps...")
-    filtered_map = build_key_map(filtered_ds, args.key_field)
-    print(f"  -> Filtered: {len(filtered_map)} unique keys")
+    filtered_map = {}
+    if filtered_ds is not None:
+        filtered_map = build_key_map(filtered_ds, args.key_field)
+        print(f"  -> Filtered: {len(filtered_map)} unique keys")
     
     checklist_map = build_key_map(checklist_ds, args.key_field)
     print(f"  -> Checklist: {len(checklist_map)} unique keys")
@@ -161,21 +188,25 @@ def main() -> None:
         merged_row["core_key"] = core_key
 
         # Merge filtered fields
-        if core_key in filtered_map:
-            filtered_row = filtered_map[core_key]
-            for field in filtered_fields:
-                if field in filtered_row:
-                    merged_row[field] = filtered_row[field]
-            stats["filtered_matched"] += 1
-        else:
-            stats["filtered_missing"] += 1
-            # Add None for missing filtered fields
-            for field in filtered_fields:
-                merged_row[field] = None
+        if filtered_fields:
+            if core_key in filtered_map:
+                filtered_row = filtered_map[core_key]
+                for field in filtered_fields:
+                    if field in filtered_row:
+                        merged_row[field] = filtered_row[field]
+                stats["filtered_matched"] += 1
+            else:
+                stats["filtered_missing"] += 1
+                # Add None for missing filtered fields
+                for field in filtered_fields:
+                    merged_row[field] = None
 
         # Merge checklist fields
+        raw_instruction_for_split = None
         if core_key in checklist_map:
             checklist_row = checklist_map[core_key]
+            if args.split_by_raw_instruction:
+                raw_instruction_for_split = checklist_row.get("raw_instruction")
             for field in checklist_fields:
                 if field in checklist_row:
                     merged_row[field] = checklist_row[field]
@@ -185,6 +216,8 @@ def main() -> None:
             # Add None for missing checklist fields
             for field in checklist_fields:
                 merged_row[field] = None
+        if args.split_by_raw_instruction:
+            merged_row["_raw_instruction_for_split"] = raw_instruction_for_split
 
         # Optionally filter out contradictory samples
         if args.filter_contradictory:
@@ -198,13 +231,70 @@ def main() -> None:
     # Print statistics
     print("\n[STATS] Merge statistics:")
     print(f"  - Total augmented samples: {len(augmented_ds)}")
-    print(f"  - Filtered matched: {stats['filtered_matched']}")
-    print(f"  - Filtered missing: {stats['filtered_missing']}")
+    if filtered_fields:
+        print(f"  - Filtered matched: {stats['filtered_matched']}")
+        print(f"  - Filtered missing: {stats['filtered_missing']}")
     print(f"  - Checklist matched: {stats['checklist_matched']}")
     print(f"  - Checklist missing: {stats['checklist_missing']}")
     if args.filter_contradictory:
         print(f"  - Filtered out (contradictory): {stats['filtered_out_contradictory']}")
     print(f"  - Final merged samples: {len(merged_rows)}")
+
+    if args.split_by_raw_instruction:
+        empty_token = args.empty_raw_instruction_value
+        empty_rows = []
+        non_empty_rows = []
+        missing_augmented = 0
+        for row in merged_rows:
+            raw_instruction = row.get("raw_instruction")
+            if raw_instruction is None:
+                raw_instruction = row.get("_raw_instruction_for_split")
+            if isinstance(raw_instruction, str) and raw_instruction.strip() == empty_token:
+                empty_rows.append(row)
+            else:
+                non_empty_rows.append(row)
+                augmented_prompt = row.get("augmented_prompt")
+                if not isinstance(augmented_prompt, str) or not augmented_prompt.strip():
+                    missing_augmented += 1
+
+        for row in merged_rows:
+            if "_raw_instruction_for_split" in row:
+                del row["_raw_instruction_for_split"]
+
+        print("\n[SPLIT] Split by raw_instruction:")
+        print(f"  - Empty raw_instruction: {len(empty_rows)}")
+        print(f"  - Non-empty augmented: {len(non_empty_rows)}")
+        if missing_augmented:
+            print(f"  - Non-empty missing/blank augmented_prompt: {missing_augmented}")
+
+        empty_ds = Dataset.from_list(empty_rows)
+        non_empty_ds = Dataset.from_list(non_empty_rows)
+
+        if args.save_to_disk:
+            empty_path = f"{args.save_to_disk}{args.empty_suffix}"
+            non_empty_path = f"{args.save_to_disk}_non_empty_augmented"
+            print(f"\n[SAVE] Saving empty raw_instruction to: {empty_path}")
+            empty_ds.save_to_disk(empty_path)
+            print("[SAVE] Done!")
+            print(f"\n[SAVE] Saving non-empty augmented to: {non_empty_path}")
+            non_empty_ds.save_to_disk(non_empty_path)
+            print("[SAVE] Done!")
+
+        if args.push_to_hub:
+            empty_repo = f"{args.push_to_hub}{args.empty_suffix}"
+            non_empty_repo = f"{args.push_to_hub}_non_empty_augmented"
+            print(f"\n[PUSH] Pushing empty raw_instruction to: {empty_repo}")
+            empty_ds.push_to_hub(empty_repo)
+            print("[PUSH] Done!")
+            print(f"\n[PUSH] Pushing non-empty augmented to: {non_empty_repo}")
+            non_empty_ds.push_to_hub(non_empty_repo)
+            print("[PUSH] Done!")
+
+        print(
+            f"\n[SUCCESS] Merged pipeline steps and split outputs "
+            f"({len(merged_rows)} total samples)"
+        )
+        return
 
     # Create merged dataset
     merged_ds = Dataset.from_list(merged_rows)
@@ -220,7 +310,7 @@ def main() -> None:
         merged_ds.push_to_hub(args.push_to_hub)
         print("[PUSH] Done!")
 
-    print(f"\n[SUCCESS] Merged 3 pipeline steps ({len(merged_rows)} total samples)")
+    print(f"\n[SUCCESS] Merged pipeline steps ({len(merged_rows)} total samples)")
 
 
 if __name__ == "__main__":
