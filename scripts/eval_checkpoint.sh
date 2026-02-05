@@ -22,10 +22,17 @@
 #   PARTITION_NUM=4 PARTITION_INDEX=0 \
 #   bash scripts/eval_checkpoint.sh
 #
-#   # With reward model
+#   # With reward model(s)
 #   MODEL=/path/to/checkpoint \
 #   DATASET=JingweiNi/magpie_creative_dedup_verifiable_test_1_5 \
 #   REWARD_MODEL=Skywork/Skywork-Reward-V2-Llama-3.1-8B \
+#   OUTPUT_DIR=./eval_results \
+#   bash scripts/eval_checkpoint.sh
+#
+#   # With multiple reward models
+#   MODEL=/path/to/checkpoint \
+#   DATASET=JingweiNi/magpie_creative_dedup_verifiable_test_1_5 \
+#   REWARD_MODEL=Skywork/Skywork-Reward-V2-Llama-3.1-8B,Other/Reward-Model \
 #   OUTPUT_DIR=./eval_results \
 #   bash scripts/eval_checkpoint.sh
 

@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from collections import OrderedDict
 
 from datasets import Dataset, load_dataset, load_from_disk
@@ -370,7 +371,11 @@ def main():
         "--reward_model",
         type=str,
         default=None,
-        help="Reward model name to score responses (e.g. Skywork/Skywork-Reward-V2-Llama-3.1-8B).",
+        help=(
+            "Reward model name(s) to score responses. "
+            "Use a single model or a comma-separated list "
+            "(e.g. Skywork/Skywork-Reward-V2-Llama-3.1-8B)."
+        ),
     )
     parser.add_argument(
         "--reward_batch_size",
@@ -432,13 +437,26 @@ def main():
     # 2. Reward model scoring (if enabled)
     # ----------------------------------------------------------------
     reward_scores_by_prompt: dict[str, list[float]] | None = None
+    reward_scores_by_prompt_multi: dict[str, dict[str, list[float]]] | None = None
+    reward_models: list[str] = []
     if args.reward_model:
-        reward_scores_by_prompt = score_with_reward_model(
-            prompt_groups,
-            model_name=args.reward_model,
-            batch_size=args.reward_batch_size,
-            device=args.reward_device,
-        )
+        reward_models = [m.strip() for m in args.reward_model.split(",") if m.strip()]
+        if len(reward_models) == 1:
+            reward_scores_by_prompt = score_with_reward_model(
+                prompt_groups,
+                model_name=reward_models[0],
+                batch_size=args.reward_batch_size,
+                device=args.reward_device,
+            )
+        else:
+            reward_scores_by_prompt_multi = {}
+            for model_name in reward_models:
+                reward_scores_by_prompt_multi[model_name] = score_with_reward_model(
+                    prompt_groups,
+                    model_name=model_name,
+                    batch_size=args.reward_batch_size,
+                    device=args.reward_device,
+                )
 
     # ----------------------------------------------------------------
     # 3. Grade each prompt's rollouts (constraint verification)
@@ -509,6 +527,15 @@ def main():
             row_data["avg_reward"] = (
                 sum(rm_scores) / len(rm_scores) if rm_scores else 0.0
             )
+        if reward_scores_by_prompt_multi is not None:
+            row_data["reward_models"] = reward_models
+            for model_name, scores_by_prompt in reward_scores_by_prompt_multi.items():
+                safe_name = re.sub(r"[^A-Za-z0-9]+", "_", model_name).strip("_")
+                rm_scores = scores_by_prompt.get(user_msg, [])
+                row_data[f"reward_scores_{safe_name}"] = rm_scores
+                row_data[f"avg_reward_{safe_name}"] = (
+                    sum(rm_scores) / len(rm_scores) if rm_scores else 0.0
+                )
 
         dataset_rows.append(row_data)
 
@@ -558,6 +585,25 @@ def main():
             all_flat = [s for r in dataset_rows for s in r.get("reward_scores", [])]
             if all_flat:
                 print(f"  Average reward per rollout: {sum(all_flat) / len(all_flat):.4f}")
+    if reward_scores_by_prompt_multi is not None:
+        for model_name in reward_models:
+            safe_name = re.sub(r"[^A-Za-z0-9]+", "_", model_name).strip("_")
+            avg_key = f"avg_reward_{safe_name}"
+            scores_key = f"reward_scores_{safe_name}"
+            all_avg_rewards = [r[avg_key] for r in dataset_rows if avg_key in r]
+            if all_avg_rewards:
+                print(
+                    f"  Average reward per prompt ({model_name}): "
+                    f"{sum(all_avg_rewards) / len(all_avg_rewards):.4f}"
+                )
+                all_flat = [
+                    s for r in dataset_rows for s in r.get(scores_key, [])
+                ]
+                if all_flat:
+                    print(
+                        f"  Average reward per rollout ({model_name}): "
+                        f"{sum(all_flat) / len(all_flat):.4f}"
+                    )
 
     print("=" * 60)
 
