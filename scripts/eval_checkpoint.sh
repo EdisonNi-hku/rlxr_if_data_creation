@@ -72,7 +72,7 @@ STRIP_THINKING=${STRIP_THINKING:-true}
 COLUMN_NAME=${COLUMN_NAME:-"pass_rate"}
 REWARD_MODEL=${REWARD_MODEL:-""}
 REWARD_BATCH_SIZE=${REWARD_BATCH_SIZE:-64}
-REWARD_DEVICE=${REWARD_DEVICE:-"cuda:0"}
+REWARD_DEVICE=${REWARD_DEVICE:-""}
 PUSH_TO_HUB=${PUSH_TO_HUB:-""}
 
 # Output configuration
@@ -195,8 +195,22 @@ else
 fi
 
 if [[ -n "$REWARD_MODEL" ]]; then
-    # Always shard reward model across all GPUs
-    REWARD_DEVICE="auto"
+    if [[ -z "$REWARD_DEVICE" ]]; then
+        if [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+            IFS=',' read -r -a _cvis <<< "$CUDA_VISIBLE_DEVICES"
+            _gpu_count=${#_cvis[@]}
+        else
+            _gpu_count="$GPU_NUM"
+        fi
+        if [[ "$_gpu_count" -le 1 ]]; then
+            REWARD_DEVICE="cuda:0"
+        else
+            REWARD_DEVICE="cuda:0"
+            for i in $(seq 1 $((_gpu_count - 1))); do
+                REWARD_DEVICE+=",cuda:$i"
+            done
+        fi
+    fi
     GRADE_ARGS+=(
         --reward_model "$REWARD_MODEL"
         --reward_batch_size "$REWARD_BATCH_SIZE"

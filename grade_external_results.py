@@ -208,23 +208,48 @@ def score_with_reward_model(
     device_mode, device_ids = parse_reward_devices(device)
 
     print(f"\nLoading reward model: {model_name}")
+    # tp_plan=None avoids OSError when device_map="auto" would trigger tensor
+    # parallelism (which requires torch.distributed to be initialized).
+    load_kwargs = dict(
+        torch_dtype=torch.bfloat16,
+        attn_implementation="flash_attention_2",
+        num_labels=1,
+        tp_plan=None,
+    )
+    auto_fallback = False
     if device_mode == "auto":
+        load_kwargs["device_map"] = "auto"
+        try:
+            rm = AutoModelForSequenceClassification.from_pretrained(
+                model_name,
+                **load_kwargs,
+            )
+            input_device = next(rm.parameters()).device
+        except OSError as exc:
+            if "torch.distributed" not in str(exc):
+                raise
+            print(
+                "  WARNING: device_map='auto' requires torch.distributed for tensor "
+                "parallelism. Falling back to data parallel on available GPUs."
+            )
+            auto_fallback = True
+
+    if device_mode != "auto" or auto_fallback:
+        load_kwargs["device_map"] = None
         rm = AutoModelForSequenceClassification.from_pretrained(
             model_name,
-            torch_dtype=torch.bfloat16,
-            device_map="auto",
-            attn_implementation="flash_attention_2",
-            num_labels=1,
+            **load_kwargs,
         )
-        input_device = next(rm.parameters()).device
-    else:
-        rm = AutoModelForSequenceClassification.from_pretrained(
-            model_name,
-            torch_dtype=torch.bfloat16,
-            device_map=None,
-            attn_implementation="flash_attention_2",
-            num_labels=1,
-        )
+        if device_mode == "auto":
+            if torch.cuda.is_available():
+                device_ids = list(range(torch.cuda.device_count()))
+                if len(device_ids) >= 2:
+                    device_mode = "data_parallel"
+                else:
+                    device_mode = "single"
+            else:
+                device_mode = "single"
+                device = "cpu"
         if device_mode == "data_parallel":
             if not device_ids:
                 raise ValueError("No valid CUDA devices provided for data parallel.")
@@ -233,6 +258,8 @@ def score_with_reward_model(
             rm = torch.nn.DataParallel(rm, device_ids=device_ids)
             input_device = torch.device(primary_device)
         else:
+            if device_mode == "single" and device == "auto":
+                device = "cuda:0" if torch.cuda.is_available() else "cpu"
             rm.to(device)
             input_device = torch.device(device)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
