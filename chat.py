@@ -319,12 +319,19 @@ class ApiChat:
         self.user_id = self.config.get("user_id", "")
         self.access_key = self.config.get("access_key", "")
         self.tag = self.config.get("tag", "")
+        self._debug_first_call = True  # print full details for the first API call
 
         # Params: explicit generation_config overrides config file defaults
         if generation_config is not None:
             self.params = generation_config
         else:
             self.params = self.config.get("default_params", {})
+
+        print(f"[ApiChat] url={self.url}")
+        print(f"[ApiChat] model={self.model}")
+        print(f"[ApiChat] params={json.dumps(self.params)}")
+        print(f"[ApiChat] app={self.app}  quota_id={self.quota_id}  "
+              f"user_id={self.user_id}  tag={self.tag}")
 
         # Cache setup (same pattern as LocalChat)
         self.cache_path = os.path.join(cache_path, "api_chat_cache.diskcache")
@@ -367,10 +374,17 @@ class ApiChat:
 
         response_json = self._send_request(prompt, params)
         if response_json is None:
+            print("[ApiChat] _send_request returned None (all retries failed)")
             reply, reasoning_content = "", ""
         else:
             reply = self._extract_reply(response_json)
             reasoning_content = self._extract_reasoning(response_json)
+            if not reply:
+                # Reply extraction failed — dump the response for debugging
+                resp_str = json.dumps(response_json, ensure_ascii=False)
+                print(f"[ApiChat] _extract_reply returned empty string")
+                print(f"[ApiChat] Response keys: {list(response_json.keys()) if isinstance(response_json, dict) else type(response_json).__name__}")
+                print(f"[ApiChat] Full response (first 1000 chars): {resp_str[:1000]}")
             if "</think>" in reply:
                 parts = reply.split("</think>")
                 reply = parts[1].strip()
@@ -378,9 +392,6 @@ class ApiChat:
 
         with self._lock:
             self.cache[(self.model, cache_key)] = (reply, reasoning_content)
-
-        if not reply:
-            log.info(f"ApiChat: empty reply. Response: {response_json}")
 
         low = reply.lower()
         if "please provide" in low or "to assist you" in low or "as an ai language model" in low:
@@ -399,7 +410,19 @@ class ApiChat:
             "access_key": self.access_key,
             "tag": self.tag,
         }
+
+        # Print the full payload for the very first API call
+        if self._debug_first_call:
+            self._debug_first_call = False
+            payload_debug = dict(payload)
+            # Truncate prompt content for readability
+            payload_debug["prompt"] = f"[{len(prompt)} messages, first role={prompt[0]['role']}]"
+            print(f"[ApiChat] First request payload (without prompt body):")
+            print(f"  POST {self.url}")
+            print(f"  {json.dumps(payload_debug, ensure_ascii=False, indent=2)}")
+
         wait_times = (5, 10, 30)
+        last_error = None
         for i in range(len(wait_times)):
             try:
                 resp = self._session.post(
@@ -408,12 +431,16 @@ class ApiChat:
                     headers={"Content-Type": "application/json"},
                     timeout=120,
                 )
+                if resp.status_code != 200:
+                    print(f"[ApiChat] HTTP {resp.status_code} from {self.url}")
+                    print(f"[ApiChat] Response body (first 500 chars): {resp.text[:500]}")
                 resp.raise_for_status()
                 return resp.json()
             except Exception as e:
+                last_error = e
                 sleep_time = wait_times[i]
-                log.info(
-                    f"ApiChat request failed: {e}. "
+                print(
+                    f"[ApiChat] Request failed: {type(e).__name__}: {e}. "
                     f"Retry #{i + 1}/{len(wait_times)} after {sleep_time}s."
                 )
                 time.sleep(sleep_time)
@@ -425,10 +452,13 @@ class ApiChat:
                 headers={"Content-Type": "application/json"},
                 timeout=120,
             )
+            if resp.status_code != 200:
+                print(f"[ApiChat] Final attempt HTTP {resp.status_code}")
+                print(f"[ApiChat] Response body (first 500 chars): {resp.text[:500]}")
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
-            log.error(f"ApiChat request failed after all retries: {e}")
+            print(f"[ApiChat] FAILED after all retries: {type(e).__name__}: {e}")
             return None
 
     @staticmethod
