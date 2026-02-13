@@ -79,6 +79,13 @@ def _extract_first_json_object(text: str) -> Optional[dict]:
 
 def parse_json_response(reply: str) -> Optional[dict]:
     """Extract JSON from the LLM reply, handling markdown code fences and extra text."""
+    # Prefer explicit <result> wrapper if present
+    result_match = re.search(r"<result>\s*(.*?)\s*</result>", reply, re.DOTALL | re.IGNORECASE)
+    if result_match:
+        parsed = _try_parse_json(result_match.group(1))
+        if isinstance(parsed, dict):
+            return parsed
+
     # Try direct parse first
     parsed = _try_parse_json(reply)
     if isinstance(parsed, dict):

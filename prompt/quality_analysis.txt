@@ -47,6 +47,6 @@ For each dimension, assign:
 If ANY dimension is scored 1, provide a brief `notes` field explaining the issues found. If all dimensions are 0, set `notes` to an empty string.
 
 [Output Format]
-Return ONLY a JSON object (no markdown fences, no explanation outside the JSON):
+Return ONLY the JSON object wrapped inside <result></result> tags (no markdown fences, no extra text outside the tags):
 
-{"incoherent_expression": 0, "logical_inconsistency": 0, "inappropriate_word_choice": 0, "repetitive_expression": 0, "language_inconsistency": 0, "notes": ""}
+<result>{"incoherent_expression": 0, "logical_inconsistency": 0, "inappropriate_word_choice": 0, "repetitive_expression": 0, "language_inconsistency": 0, "notes": ""}</result>
