@@ -77,33 +77,65 @@ def _extract_first_json_object(text: str) -> Optional[dict]:
     return None
 
 
+def _extract_first_json_object_text(text: str) -> Optional[str]:
+    """Return the substring for the first decodable JSON value starting at a { or [."""
+    if not isinstance(text, str):
+        return None
+    decoder = json.JSONDecoder()
+    for i, ch in enumerate(text):
+        if ch not in "{[":
+            continue
+        try:
+            _, end = decoder.raw_decode(text[i:])
+        except json.JSONDecodeError:
+            continue
+        return text[i:i + end]
+    return None
+
+
 def parse_json_response(reply: str) -> Optional[dict]:
     """Extract JSON from the LLM reply, handling markdown code fences and extra text."""
+    parsed, _ = parse_json_response_debug(reply)
+    return parsed
+
+
+def parse_json_response_debug(reply: str) -> tuple[Optional[dict], list[tuple[str, str]]]:
+    """Parse reply and also return candidate strings attempted."""
+    candidates: list[tuple[str, str]] = []
+
     # Prefer explicit <result> wrapper if present
     result_match = re.search(r"<result>\s*(.*?)\s*</result>", reply, re.DOTALL | re.IGNORECASE)
     if result_match:
-        parsed = _try_parse_json(result_match.group(1))
+        snippet = result_match.group(1).strip()
+        candidates.append(("result_tag", snippet))
+        parsed = _try_parse_json(snippet)
         if isinstance(parsed, dict):
-            return parsed
+            return parsed, candidates
 
     # Try direct parse first
+    candidates.append(("direct", reply.strip()))
     parsed = _try_parse_json(reply)
     if isinstance(parsed, dict):
-        return parsed
+        return parsed, candidates
 
     # Try extracting from markdown code fences
     fence_match = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", reply, re.DOTALL)
     if fence_match:
-        parsed = _try_parse_json(fence_match.group(1))
+        snippet = fence_match.group(1).strip()
+        candidates.append(("code_fence", snippet))
+        parsed = _try_parse_json(snippet)
         if isinstance(parsed, dict):
-            return parsed
+            return parsed, candidates
 
     # Try finding the first JSON object anywhere in the text
-    parsed = _extract_first_json_object(reply)
-    if isinstance(parsed, dict):
-        return parsed
+    obj_text = _extract_first_json_object_text(reply)
+    if obj_text:
+        candidates.append(("first_json_object", obj_text.strip()))
+        parsed = _try_parse_json(obj_text)
+        if isinstance(parsed, dict):
+            return parsed, candidates
 
-    return None
+    return None, candidates
 
 
 QUALITY_DIMS = [
@@ -404,13 +436,21 @@ def main() -> None:
             tqdm.write(f"[SKIP] idx={idx} {label}: LLM returned empty reply")
             return None
 
-        parsed = parse_json_response(reply.strip())
+        parsed, candidates = parse_json_response_debug(reply.strip())
         if parsed is None:
             with fail_lock:
                 fail_counts["json_parse_fail"] += 1
+            candidate_text = ""
+            if candidates:
+                parts = []
+                for label, text in candidates:
+                    preview = text if len(text) <= 800 else text[:800] + "...[truncated]"
+                    parts.append(f"  Candidate ({label}): {preview}")
+                candidate_text = "\n" + "\n".join(parts)
             tqdm.write(
                 f"[SKIP] idx={idx} {label}: JSON parse failed\n"
                 f"  Raw reply (first 300 chars): {reply.strip()[:300]}"
+                f"{candidate_text}"
             )
             return None
 
