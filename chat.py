@@ -6,6 +6,7 @@ import logging
 import json
 import diskcache as dc
 import threading
+import requests
 from openai import OpenAI
 
 log = logging.getLogger()
@@ -288,3 +289,180 @@ class OpenAIChat:
             messages=messages,
             **self.generation_config,
         )
+
+
+class ApiChat:
+    """
+    Generic LLM API client with persistent disk cache.
+
+    Wraps a POST-based LLM endpoint that expects:
+        {model, prompt, params, app, quota_id, user_id, access_key, tag}
+
+    Config is loaded from a JSON file (default: config/llm_api.json).
+    Interface matches LocalChat.ask() so it can be used as a drop-in replacement.
+    """
+
+    def __init__(
+        self,
+        config_path: str = "config/llm_api.json",
+        model: str = None,
+        cache_path: str = os.path.expanduser("~") + "/.cache",
+        generation_config: dict = None,
+    ):
+        with open(config_path, "r", encoding="utf-8") as f:
+            self.config = json.load(f)
+
+        self.url = self.config["url"]
+        self.model = model or self.config["model"]
+        self.app = self.config.get("app", "")
+        self.quota_id = self.config.get("quota_id", "")
+        self.user_id = self.config.get("user_id", "")
+        self.access_key = self.config.get("access_key", "")
+        self.tag = self.config.get("tag", "")
+
+        # Params: explicit generation_config overrides config file defaults
+        if generation_config is not None:
+            self.params = generation_config
+        else:
+            self.params = self.config.get("default_params", {})
+
+        # Cache setup (same pattern as LocalChat)
+        self.cache_path = os.path.join(cache_path, "api_chat_cache.diskcache")
+        os.makedirs(cache_path, exist_ok=True)
+
+        cache_settings = dc.DEFAULT_SETTINGS.copy()
+        cache_settings["eviction_policy"] = "none"
+        cache_settings["size_limit"] = int(1e12)
+        cache_settings["cull_limit"] = 0
+        self.cache = dc.Cache(self.cache_path, **cache_settings)
+        self._lock = threading.Lock()
+        self._session = requests.Session()
+
+    def ask(self, messages: list[dict], **kwargs) -> tuple[str, str]:
+        """Send messages to the API and return (reply, reasoning_content).
+
+        Messages can be in either format:
+          - OpenAI style: [{"role": "user", "content": "text"}]
+          - Structured:   [{"role": "user", "content": [{"type": "text", "text": "..."}]}]
+        Both are accepted; simple string content is auto-wrapped for the API.
+        """
+        params = {**self.params, **kwargs} if kwargs else self.params
+        cache_key = json.dumps(
+            {"messages": messages, "params": params},
+            ensure_ascii=False, sort_keys=True,
+        )
+        reply, reasoning_content = self.cache.get(
+            (self.model, cache_key), ("", "")
+        )
+        if reply != "":
+            return reply, reasoning_content
+
+        # Normalize messages: wrap plain-string content into structured format
+        prompt = []
+        for msg in messages:
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                content = [{"type": "text", "text": content}]
+            prompt.append({"role": msg["role"], "content": content})
+
+        response_json = self._send_request(prompt, params)
+        if response_json is None:
+            reply, reasoning_content = "", ""
+        else:
+            reply = self._extract_reply(response_json)
+            reasoning_content = self._extract_reasoning(response_json)
+            if "</think>" in reply:
+                parts = reply.split("</think>")
+                reply = parts[1].strip()
+                reasoning_content = parts[0].strip()
+
+        with self._lock:
+            self.cache[(self.model, cache_key)] = (reply, reasoning_content)
+
+        if not reply:
+            log.info(f"ApiChat: empty reply. Response: {response_json}")
+
+        low = reply.lower()
+        if "please provide" in low or "to assist you" in low or "as an ai language model" in low:
+            return "", ""
+
+        return reply, reasoning_content
+
+    def _send_request(self, prompt: list[dict], params: dict) -> dict | None:
+        payload = {
+            "model": self.model,
+            "prompt": prompt,
+            "params": params,
+            "app": self.app,
+            "quota_id": self.quota_id,
+            "user_id": self.user_id,
+            "access_key": self.access_key,
+            "tag": self.tag,
+        }
+        wait_times = (5, 10, 30)
+        for i in range(len(wait_times)):
+            try:
+                resp = self._session.post(
+                    self.url,
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                    timeout=120,
+                )
+                resp.raise_for_status()
+                return resp.json()
+            except Exception as e:
+                sleep_time = wait_times[i]
+                log.info(
+                    f"ApiChat request failed: {e}. "
+                    f"Retry #{i + 1}/{len(wait_times)} after {sleep_time}s."
+                )
+                time.sleep(sleep_time)
+        # Final attempt
+        try:
+            resp = self._session.post(
+                self.url,
+                json=payload,
+                headers={"Content-Type": "application/json"},
+                timeout=120,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            log.error(f"ApiChat request failed after all retries: {e}")
+            return None
+
+    @staticmethod
+    def _extract_reply(data: dict) -> str:
+        """Extract the reply text from various possible response formats."""
+        # OpenAI-compatible: choices[0].message.content
+        if "choices" in data:
+            try:
+                return data["choices"][0]["message"]["content"]
+            except (KeyError, IndexError, TypeError):
+                pass
+        # Flat fields
+        for key in ("response", "content", "text", "reply", "output"):
+            if key in data and isinstance(data[key], str):
+                return data[key]
+        # Nested under "data"
+        if "data" in data and isinstance(data["data"], dict):
+            return ApiChat._extract_reply(data["data"])
+        return ""
+
+    @staticmethod
+    def _extract_reasoning(data: dict) -> str:
+        """Extract reasoning/thinking content if present."""
+        for key in ("reasoning_content", "thinking", "reasoning"):
+            if key in data and isinstance(data[key], str):
+                return data[key]
+        if "choices" in data:
+            try:
+                msg = data["choices"][0]["message"]
+                for key in ("reasoning_content", "thinking"):
+                    if key in msg and isinstance(msg[key], str):
+                        return msg[key]
+            except (KeyError, IndexError, TypeError):
+                pass
+        if "data" in data and isinstance(data["data"], dict):
+            return ApiChat._extract_reasoning(data["data"])
+        return ""
