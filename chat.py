@@ -452,12 +452,15 @@ class ApiChat:
             except (KeyError, IndexError, TypeError):
                 pass
         # Flat fields
-        for key in ("response", "content", "text", "reply", "output"):
+        for key in ("response", "content", "text", "reply", "output", "message"):
             if key in data and isinstance(data[key], str):
                 return data[key]
-        # Nested under "data"
-        if "data" in data and isinstance(data["data"], dict):
-            return ApiChat._extract_reply(data["data"])
+        # Nested under "data" or "completion"
+        for nest_key in ("completion", "data"):
+            if nest_key in data and isinstance(data[nest_key], dict):
+                result = ApiChat._extract_reply(data[nest_key])
+                if result:
+                    return result
         return ""
 
     @staticmethod
@@ -474,6 +477,10 @@ class ApiChat:
                         return msg[key]
             except (KeyError, IndexError, TypeError):
                 pass
-        if "data" in data and isinstance(data["data"], dict):
-            return ApiChat._extract_reasoning(data["data"])
+        # Nested under "data" or "completion"
+        for nest_key in ("completion", "data"):
+            if nest_key in data and isinstance(data[nest_key], dict):
+                result = ApiChat._extract_reasoning(data[nest_key])
+                if result:
+                    return result
         return ""
