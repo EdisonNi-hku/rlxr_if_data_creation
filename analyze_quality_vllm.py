@@ -40,29 +40,61 @@ def extract_response(rollout_row: dict) -> str:
     return ""
 
 
-def parse_json_response(reply: str) -> Optional[dict]:
-    """Extract JSON from the LLM reply, handling markdown code fences."""
-    # Try direct parse first
+def _try_parse_json(text: str) -> Optional[dict]:
+    """Try to parse JSON and return a dict if possible."""
+    if not isinstance(text, str):
+        return None
+    text = text.strip()
+    if not text:
+        return None
     try:
-        return json.loads(reply)
+        parsed = json.loads(text)
     except (json.JSONDecodeError, TypeError):
-        pass
+        return None
+    if isinstance(parsed, str):
+        # Handle cases where the model returns a JSON-encoded string.
+        try:
+            parsed = json.loads(parsed)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _extract_first_json_object(text: str) -> Optional[dict]:
+    """Scan text and decode the first valid JSON object."""
+    if not isinstance(text, str):
+        return None
+    decoder = json.JSONDecoder()
+    for i, ch in enumerate(text):
+        if ch not in "{[":
+            continue
+        try:
+            obj, _ = decoder.raw_decode(text[i:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            return obj
+    return None
+
+
+def parse_json_response(reply: str) -> Optional[dict]:
+    """Extract JSON from the LLM reply, handling markdown code fences and extra text."""
+    # Try direct parse first
+    parsed = _try_parse_json(reply)
+    if isinstance(parsed, dict):
+        return parsed
 
     # Try extracting from markdown code fences
     fence_match = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", reply, re.DOTALL)
     if fence_match:
-        try:
-            return json.loads(fence_match.group(1))
-        except (json.JSONDecodeError, TypeError):
-            pass
+        parsed = _try_parse_json(fence_match.group(1))
+        if isinstance(parsed, dict):
+            return parsed
 
-    # Try finding the first { ... } block
-    brace_match = re.search(r"\{.*\}", reply, re.DOTALL)
-    if brace_match:
-        try:
-            return json.loads(brace_match.group(0))
-        except (json.JSONDecodeError, TypeError):
-            pass
+    # Try finding the first JSON object anywhere in the text
+    parsed = _extract_first_json_object(reply)
+    if isinstance(parsed, dict):
+        return parsed
 
     return None
 
