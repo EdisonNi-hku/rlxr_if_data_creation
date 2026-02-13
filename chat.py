@@ -444,23 +444,30 @@ class ApiChat:
 
     @staticmethod
     def _extract_reply(data: dict) -> str:
-        """Extract the reply text from various possible response formats."""
+        """Extract the reply text from various possible response formats.
+
+        Priority order:
+          1. OpenAI choices[0].message.content (at current level)
+          2. Recurse into "completion" / "data" sub-dicts
+          3. Flat string keys as last resort
+        """
         # OpenAI-compatible: choices[0].message.content
         if "choices" in data:
             try:
                 return data["choices"][0]["message"]["content"]
             except (KeyError, IndexError, TypeError):
                 pass
-        # Flat fields
-        for key in ("response", "content", "text", "reply", "output", "message"):
-            if key in data and isinstance(data[key], str):
-                return data[key]
-        # Nested under "data" or "completion"
+        # Recurse into nested structures before trying flat keys,
+        # because top-level "message" can be "success" (not the LLM reply).
         for nest_key in ("completion", "data"):
             if nest_key in data and isinstance(data[nest_key], dict):
                 result = ApiChat._extract_reply(data[nest_key])
                 if result:
                     return result
+        # Flat fields (last resort)
+        for key in ("response", "content", "text", "reply", "output", "message"):
+            if key in data and isinstance(data[key], str):
+                return data[key]
         return ""
 
     @staticmethod
@@ -477,7 +484,7 @@ class ApiChat:
                         return msg[key]
             except (KeyError, IndexError, TypeError):
                 pass
-        # Nested under "data" or "completion"
+        # Recurse into nested structures
         for nest_key in ("completion", "data"):
             if nest_key in data and isinstance(data[nest_key], dict):
                 result = ApiChat._extract_reasoning(data[nest_key])
