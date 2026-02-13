@@ -8,6 +8,8 @@ import json
 import os
 import random
 import re
+import threading
+import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
@@ -108,13 +110,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--model2-rollout",
-        default="checkpoint_eval/eval_Qwen3-30B-PPO-Norm-150.jsonl",
-        help="Path to model 2 rollout JSONL (with responses).",
+        default=None,
+        help="Path to model 2 rollout JSONL. Optional — omit to grade only model 1.",
     )
     parser.add_argument(
         "--model2-graded",
-        default="checkpoint_eval/eval_Qwen3-30B-PPO-Norm-150_graded.jsonl",
-        help="Path to model 2 graded JSONL (with scores).",
+        default=None,
+        help="Path to model 2 graded JSONL. Optional — omit to grade only model 1.",
     )
     parser.add_argument(
         "--output", "-o",
@@ -234,19 +236,26 @@ def main() -> None:
     elif args.model not in GENERATION_CONFIGS:
         generation_config = {}
 
-    # Load the 4 input files
+    # Load input files
     print(f"Loading model1 rollout: {args.model1_rollout}")
     m1_rollout = load_jsonl(args.model1_rollout)
     print(f"Loading model1 graded: {args.model1_graded}")
     m1_graded = load_jsonl(args.model1_graded)
-    print(f"Loading model2 rollout: {args.model2_rollout}")
-    m2_rollout = load_jsonl(args.model2_rollout)
-    print(f"Loading model2 graded: {args.model2_graded}")
-    m2_graded = load_jsonl(args.model2_graded)
 
-    assert len(m1_rollout) == len(m2_rollout), (
-        f"Row count mismatch: {len(m1_rollout)} vs {len(m2_rollout)}"
-    )
+    two_models = args.model2_rollout is not None
+    m2_rollout = None
+    m2_graded = None
+    if two_models:
+        print(f"Loading model2 rollout: {args.model2_rollout}")
+        m2_rollout = load_jsonl(args.model2_rollout)
+        print(f"Loading model2 graded: {args.model2_graded}")
+        m2_graded = load_jsonl(args.model2_graded)
+        assert len(m1_rollout) == len(m2_rollout), (
+            f"Row count mismatch: {len(m1_rollout)} vs {len(m2_rollout)}"
+        )
+    else:
+        print("[INFO] Single-model mode (no model2 provided)")
+
     total_rows = len(m1_rollout)
 
     # Build index list with partitioning
@@ -286,10 +295,28 @@ def main() -> None:
                 generation_config=generation_config,
             )
 
+    # Track failure reasons for the final summary
+    fail_counts = {
+        "empty_instruction": 0,
+        "empty_response": 0,
+        "empty_reply": 0,
+        "json_parse_fail": 0,
+        "validation_fail": 0,
+        "exception": 0,
+        "all_none": 0,
+    }
+    fail_lock = threading.Lock()
+
     def build_messages(idx: int, response: str) -> Optional[list[dict]]:
         """Build the messages for a given row index and a single response."""
         instruction = m1_rollout[idx].get("instruction", "")
-        if not instruction or not response:
+        if not instruction:
+            with fail_lock:
+                fail_counts["empty_instruction"] += 1
+            return None
+        if not response:
+            with fail_lock:
+                fail_counts["empty_response"] += 1
             return None
 
         user_prompt = (
@@ -309,70 +336,92 @@ def main() -> None:
         """Call the LLM for a single response and parse the result."""
         reply, _ = chat.ask(messages)
         if not reply:
+            with fail_lock:
+                fail_counts["empty_reply"] += 1
+            tqdm.write(f"[SKIP] idx={idx} {label}: LLM returned empty reply")
             return None
 
-        # Debug: print the first prompt/response pair
+        # Debug: always print the first sample
         try:
             if idx == indices[0] and label == "m1":
-                print("--- DEBUG: first prompt/response ---")
-                print("MESSAGES:\n" + json.dumps(messages[:1], indent=2, ensure_ascii=False)[:500])
-                print("MODEL REPLY:\n" + (reply.strip()[:500] if reply else "<empty>"))
-                print("--- END DEBUG ---")
+                print("\n--- DEBUG: first prompt/response ---")
+                print(f"USER PROMPT (first 800 chars):\n{messages[-1]['content'][:800]}")
+                print(f"\nRAW REPLY (first 1000 chars):\n{reply[:1000]}")
+                print("--- END DEBUG ---\n")
         except Exception:
             pass
 
         parsed = parse_json_response(reply.strip())
         if parsed is None:
-            tqdm.write(f"[WARN] Failed to parse JSON for idx={idx} {label}: {reply[:200]}")
+            with fail_lock:
+                fail_counts["json_parse_fail"] += 1
+            tqdm.write(
+                f"[SKIP] idx={idx} {label}: JSON parse failed\n"
+                f"  Raw reply (first 300 chars): {reply.strip()[:300]}"
+            )
             return None
 
         validated = validate_analysis(parsed)
         if validated is None:
-            tqdm.write(f"[WARN] Invalid analysis structure for idx={idx} {label}")
+            with fail_lock:
+                fail_counts["validation_fail"] += 1
+            tqdm.write(
+                f"[SKIP] idx={idx} {label}: validation failed\n"
+                f"  Parsed keys: {list(parsed.keys()) if isinstance(parsed, dict) else type(parsed).__name__}\n"
+                f"  Parsed value: {json.dumps(parsed, ensure_ascii=False)[:300]}"
+            )
             return None
 
         return validated
 
     def build_result(idx: int) -> Optional[dict]:
-        """Make two pointwise LLM calls (one per response) for a given row."""
+        """Make pointwise LLM calls for a given row."""
         response_m1 = extract_response(m1_rollout[idx])
-        response_m2 = extract_response(m2_rollout[idx])
-
         msgs_m1 = build_messages(idx, response_m1)
-        msgs_m2 = build_messages(idx, response_m2)
+
+        if two_models:
+            response_m2 = extract_response(m2_rollout[idx])
+            msgs_m2 = build_messages(idx, response_m2)
+        else:
+            msgs_m2 = None
 
         if msgs_m1 is None and msgs_m2 is None:
-            return None
-
-        m1_analysis = call_and_parse(idx, msgs_m1, "m1") if msgs_m1 else None
-        m2_analysis = call_and_parse(idx, msgs_m2, "m2") if msgs_m2 else None
-
-        if m1_analysis is None and m2_analysis is None:
+            with fail_lock:
+                fail_counts["all_none"] += 1
+            tqdm.write(f"[SKIP] idx={idx}: could not build messages (empty instruction or response)")
             return None
 
         empty = {dim: 0 for dim in QUALITY_DIMS}
         empty["notes"] = ""
 
-        return {
-            "idx": idx,
-            "m1_analysis": m1_analysis if m1_analysis else empty,
-            "m2_analysis": m2_analysis if m2_analysis else empty,
-        }
+        m1_analysis = call_and_parse(idx, msgs_m1, "m1") if msgs_m1 else None
+        result = {"idx": idx, "m1_analysis": m1_analysis if m1_analysis else empty}
+
+        if two_models:
+            m2_analysis = call_and_parse(idx, msgs_m2, "m2") if msgs_m2 else None
+            result["m2_analysis"] = m2_analysis if m2_analysis else empty
+
+        if m1_analysis is None and (not two_models or result.get("m2_analysis") == empty):
+            return None
+
+        return result
 
     processed = 0
     skipped = 0
     max_inflight = max(1, args.max_inflight)
     limit = len(indices)
 
-    # Mode 1: Save prompts only (2 prompts per row: m1 and m2)
+    # Mode 1: Save prompts only
     if args.save_prompts_jsonl:
         prompts_list = []
         pbar = tqdm(total=limit, unit="sample", desc="Building prompts")
         for idx in indices:
             response_m1 = extract_response(m1_rollout[idx])
-            response_m2 = extract_response(m2_rollout[idx])
             msgs_m1 = build_messages(idx, response_m1)
-            msgs_m2 = build_messages(idx, response_m2)
+            msgs_m2 = None
+            if two_models:
+                response_m2 = extract_response(m2_rollout[idx])
+                msgs_m2 = build_messages(idx, response_m2)
             if msgs_m1 is None and msgs_m2 is None:
                 skipped += 1
             else:
@@ -410,7 +459,13 @@ def main() -> None:
                 processed += 1
         except Exception as exc:
             skipped += 1
-            tqdm.write(f"Error processing sample {idx}: {exc}")
+            with fail_lock:
+                fail_counts["exception"] += 1
+            tqdm.write(
+                f"[ERROR] idx={idx}: exception in build_result\n"
+                f"  {type(exc).__name__}: {exc}\n"
+                f"  {''.join(traceback.format_tb(exc.__traceback__))}"
+            )
         pbar.update(1)
         pbar.set_postfix({"ok": processed, "skip": skipped})
 
@@ -433,16 +488,48 @@ def main() -> None:
 
     pbar.close()
 
+    # Print failure breakdown
+    total_failures = sum(fail_counts.values())
+    if total_failures > 0 or skipped > 0:
+        print(f"\n--- Failure breakdown ({skipped} skipped out of {limit}) ---")
+        for reason, count in fail_counts.items():
+            if count > 0:
+                print(f"  {reason}: {count}")
+        print("---")
+
     results = [results_map[idx] for idx in sorted(results_map)]
     if not results:
-        print("No samples processed. Nothing to save.")
+        print(f"\nNo samples processed. Nothing to save.")
+        print(f"  Total attempted: {limit}")
+        print(f"  Processed: {processed}")
+        print(f"  Skipped: {skipped}")
+        print(f"\nTroubleshooting:")
+        if fail_counts["empty_instruction"] > 0:
+            print(f"  - {fail_counts['empty_instruction']} rows had empty 'instruction' field. "
+                  f"Check your rollout JSONL has an 'instruction' key.")
+        if fail_counts["empty_response"] > 0:
+            print(f"  - {fail_counts['empty_response']} rows had empty responses. "
+                  f"Check your rollout JSONL has a 'responses' key with non-empty content.")
+        if fail_counts["empty_reply"] > 0:
+            print(f"  - {fail_counts['empty_reply']} LLM calls returned empty replies. "
+                  f"Check your API endpoint/config (--base_url or --api_config).")
+        if fail_counts["json_parse_fail"] > 0:
+            print(f"  - {fail_counts['json_parse_fail']} LLM replies could not be parsed as JSON. "
+                  f"The model may not be following the output format.")
+        if fail_counts["validation_fail"] > 0:
+            print(f"  - {fail_counts['validation_fail']} parsed JSONs failed validation. "
+                  f"Expected keys: {QUALITY_DIMS}")
+        if fail_counts["exception"] > 0:
+            print(f"  - {fail_counts['exception']} rows raised exceptions (see tracebacks above).")
+        if fail_counts["all_none"] > 0:
+            print(f"  - {fail_counts['all_none']} rows had no valid instruction+response pair.")
         return
 
     with open(args.output, "w", encoding="utf-8") as f:
         for row in results:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
-    print(f"Done! Analyzed {processed} samples, skipped {skipped}. Output: {args.output}")
+    print(f"\nDone! Analyzed {processed} samples, skipped {skipped}. Output: {args.output}")
 
 
 if __name__ == "__main__":
