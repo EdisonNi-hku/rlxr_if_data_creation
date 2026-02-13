@@ -125,8 +125,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--model",
-        default="openai/gpt-oss-120b",
-        help="Model name served by vLLM.",
+        default=None,
+        help="Model name. Overrides config file model when using --api_config.",
     )
     parser.add_argument(
         "--base_url",
@@ -233,7 +233,7 @@ def main() -> None:
     generation_config = None
     if args.generation_config:
         generation_config = json.loads(args.generation_config)
-    elif args.model not in GENERATION_CONFIGS:
+    elif args.model and args.model not in GENERATION_CONFIGS:
         generation_config = {}
 
     # Load input files
@@ -281,15 +281,18 @@ def main() -> None:
     chat = None
     if not args.save_prompts_jsonl:
         if args.api_config:
+            # For ApiChat: only pass model/generation_config if explicitly provided,
+            # otherwise let ApiChat use values from the config file.
             chat = ApiChat(
                 config_path=args.api_config,
-                model=args.model,
+                model=args.model,          # None unless user passed --model explicitly
                 cache_path=args.cache_path,
-                generation_config=generation_config,
+                generation_config=generation_config,  # None unless user passed --generation_config
             )
         else:
+            model = args.model or "openai/gpt-oss-120b"
             chat = LocalChat(
-                model=args.model,
+                model=model,
                 base_url=args.base_url,
                 cache_path=args.cache_path,
                 generation_config=generation_config,
