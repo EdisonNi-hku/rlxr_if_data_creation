@@ -346,6 +346,12 @@ class ApiChat:
         self.cache = dc.Cache(self.cache_path, **cache_settings)
         self._lock = threading.Lock()
         self._session = requests.Session()
+        self._debug_counter = 0
+
+        if self.debug:
+            self._debug_dir = os.path.join(cache_path, "api_debug")
+            os.makedirs(self._debug_dir, exist_ok=True)
+            print(f"[ApiChat DEBUG] Saving raw API responses to {self._debug_dir}/")
 
     def ask(self, messages: list[dict], **kwargs) -> tuple[str, str]:
         """Send messages to the API and return (reply, reasoning_content).
@@ -433,13 +439,50 @@ class ApiChat:
             if resp.status_code != 200:
                 print(f"[ApiChat] HTTP {resp.status_code} from {self.url}")
                 print(f"[ApiChat] Response body: {resp.text[:2000]}")
+
+            if self.debug:
+                with self._lock:
+                    seq = self._debug_counter
+                    self._debug_counter += 1
+                # Save raw bytes exactly as received
+                raw_path = os.path.join(self._debug_dir, f"response_{seq:04d}_raw.bin")
+                with open(raw_path, "wb") as f:
+                    f.write(resp.content)
+                # Save decoded text
+                txt_path = os.path.join(self._debug_dir, f"response_{seq:04d}.txt")
+                with open(txt_path, "w", encoding="utf-8") as f:
+                    f.write(f"HTTP {resp.status_code}\n")
+                    f.write(f"Content-Type: {resp.headers.get('Content-Type', 'N/A')}\n")
+                    f.write(f"Encoding: {resp.encoding}\n")
+                    f.write(f"Content length: {len(resp.content)} bytes\n")
+                    f.write(f"---\n")
+                    f.write(resp.text)
+                print(f"[ApiChat DEBUG] Saved response #{seq} to {raw_path} and {txt_path}")
+
             resp.raise_for_status()
             result = resp.json()
+
             if self.debug:
-                print(f"[ApiChat DEBUG] Full response:\n{json.dumps(result, ensure_ascii=False, indent=2)}")
+                # Save parsed JSON for comparison
+                json_path = os.path.join(self._debug_dir, f"response_{seq:04d}_parsed.json")
+                with open(json_path, "w", encoding="utf-8") as f:
+                    json.dump(result, f, ensure_ascii=False, indent=2)
+                # Show extraction result
+                extracted = self._extract_reply(result)
+                print(f"[ApiChat DEBUG] Extracted reply (first 500 chars): {extracted[:500]}")
+
             return result
         except Exception as e:
             print(f"[ApiChat] Request failed: {type(e).__name__}: {e}")
+            if self.debug:
+                # Still save whatever we got
+                try:
+                    err_path = os.path.join(self._debug_dir, f"response_{seq:04d}_error.txt")
+                    with open(err_path, "w", encoding="utf-8") as f:
+                        f.write(f"{type(e).__name__}: {e}\n")
+                        f.write(f"Response text:\n{resp.text}\n")
+                except Exception:
+                    pass
             return None
 
     @staticmethod
