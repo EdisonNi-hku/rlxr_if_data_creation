@@ -30,6 +30,15 @@ M2_GRADED=${M2_GRADED:-"checkpoint_eval/eval_Qwen3-30B-PPO-Norm-150_graded.jsonl
 MODEL=${MODEL:-"openai/gpt-oss-120b"}
 GENERATION_CONFIG=${GENERATION_CONFIG:-'{"extra_body": {"reasoning_effort": "medium"}}'}
 
+# --- ApiChat (optional) ---
+#   Set API_CONFIG to use analyze_quality_vllm.py's ApiChat client instead of vLLM.
+#   When API_CONFIG is set, MODEL/GENERATION_CONFIG are NOT passed unless overrides are enabled.
+API_CONFIG=${API_CONFIG:-""}
+MODEL_OVERRIDE=${MODEL_OVERRIDE:-false}
+GENERATION_CONFIG_OVERRIDE=${GENERATION_CONFIG_OVERRIDE:-false}
+DEBUG=${DEBUG:-false}
+DEBUG_DIR=${DEBUG_DIR:-""}
+
 # --- vLLM server ---
 #   Set START_VLLM=true to have this script launch & manage a local server.
 #   Set START_VLLM=false if you already have a server running.
@@ -77,6 +86,9 @@ echo "  M2 rollout:   $M2_ROLLOUT"
 echo "  M2 graded:    $M2_GRADED"
 echo "  Model:        $MODEL"
 echo "  vLLM URL:     $VLLM_BASE_URL"
+if [[ -n "$API_CONFIG" ]]; then
+    echo "  Api config:   $API_CONFIG"
+fi
 echo "  Start vLLM:   $START_VLLM"
 echo "  Workers:      $NUM_WORKERS"
 echo "  Max inflight: $MAX_INFLIGHT"
@@ -138,16 +150,35 @@ run_analysis() {
         --model2-rollout "$M2_ROLLOUT"
         --model2-graded  "$M2_GRADED"
         --output         "$ANALYSIS_OUTPUT"
-        --model          "$MODEL"
-        --base_url       "$VLLM_BASE_URL"
         --cache_path     "$CACHE_PATH"
         --num_workers    "$NUM_WORKERS"
         --max_inflight   "$MAX_INFLIGHT"
         --start_index    "$START_INDEX"
-        --generation_config "$GENERATION_CONFIG"
         --partition_num  "$PARTITION_NUM"
         --partition_index "$PARTITION_INDEX"
     )
+
+    if [[ -n "$API_CONFIG" ]]; then
+        cmd_args+=(--api_config "$API_CONFIG")
+        if [[ "$MODEL_OVERRIDE" == "true" ]]; then
+            cmd_args+=(--model "$MODEL")
+        fi
+        if [[ "$GENERATION_CONFIG_OVERRIDE" == "true" && -n "$GENERATION_CONFIG" ]]; then
+            cmd_args+=(--generation_config "$GENERATION_CONFIG")
+        fi
+        if [[ "$DEBUG" == "true" ]]; then
+            cmd_args+=(--debug)
+            if [[ -n "$DEBUG_DIR" ]]; then
+                cmd_args+=(--debug_dir "$DEBUG_DIR")
+            fi
+        fi
+    else
+        cmd_args+=(
+            --model          "$MODEL"
+            --base_url       "$VLLM_BASE_URL"
+            --generation_config "$GENERATION_CONFIG"
+        )
+    fi
 
     if [[ -n "$MAX_SAMPLES" ]]; then
         cmd_args+=(--max_samples "$MAX_SAMPLES")
