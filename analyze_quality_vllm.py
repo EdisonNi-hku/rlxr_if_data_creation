@@ -217,6 +217,11 @@ def main() -> None:
         default=None,
         help="Path to ApiChat config JSON. When set, uses ApiChat instead of LocalChat.",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable verbose debug output (prints full LLM responses, payloads, etc.).",
+    )
     args = parser.parse_args()
 
     if args.partition_num < 1:
@@ -288,6 +293,7 @@ def main() -> None:
                 model=args.model,          # None unless user passed --model explicitly
                 cache_path=args.cache_path,
                 generation_config=generation_config,  # None unless user passed --generation_config
+                debug=args.debug,
             )
         else:
             model = args.model or "openai/gpt-oss-120b"
@@ -337,22 +343,21 @@ def main() -> None:
 
     def call_and_parse(idx: int, messages: list[dict], label: str) -> Optional[dict]:
         """Call the LLM for a single response and parse the result."""
-        reply, _ = chat.ask(messages)
+        reply, reasoning = chat.ask(messages)
+
+        if args.debug:
+            tqdm.write(
+                f"\n[DEBUG] idx={idx} {label}:\n"
+                f"  USER PROMPT:\n{messages[-1]['content']}\n"
+                f"  RAW REPLY:\n{reply}\n"
+                f"  REASONING:\n{reasoning}\n"
+            )
+
         if not reply:
             with fail_lock:
                 fail_counts["empty_reply"] += 1
             tqdm.write(f"[SKIP] idx={idx} {label}: LLM returned empty reply")
             return None
-
-        # Debug: always print the first sample
-        try:
-            if idx == indices[0] and label == "m1":
-                print("\n--- DEBUG: first prompt/response ---")
-                print(f"USER PROMPT (first 800 chars):\n{messages[-1]['content'][:800]}")
-                print(f"\nRAW REPLY (first 1000 chars):\n{reply[:1000]}")
-                print("--- END DEBUG ---\n")
-        except Exception:
-            pass
 
         parsed = parse_json_response(reply.strip())
         if parsed is None:
