@@ -309,6 +309,7 @@ class ApiChat:
         cache_path: str = os.path.expanduser("~") + "/.cache",
         generation_config: dict = None,
         debug: bool = False,
+        debug_dir: str = None,
     ):
         with open(config_path, "r", encoding="utf-8") as f:
             self.config = json.load(f)
@@ -349,7 +350,7 @@ class ApiChat:
         self._debug_counter = 0
 
         if self.debug:
-            self._debug_dir = os.path.join(cache_path, "api_debug")
+            self._debug_dir = debug_dir or os.path.join(cache_path, "api_debug")
             os.makedirs(self._debug_dir, exist_ok=True)
             print(f"[ApiChat DEBUG] Saving raw API responses to {self._debug_dir}/")
 

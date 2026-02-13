@@ -222,6 +222,11 @@ def main() -> None:
         action="store_true",
         help="Enable verbose debug output (prints full LLM responses, payloads, etc.).",
     )
+    parser.add_argument(
+        "--debug_dir",
+        default=None,
+        help="Directory to save raw API responses in debug mode. Default: <cache_path>/api_debug/",
+    )
     args = parser.parse_args()
 
     if args.partition_num < 1:
@@ -294,6 +299,7 @@ def main() -> None:
                 cache_path=args.cache_path,
                 generation_config=generation_config,  # None unless user passed --generation_config
                 debug=args.debug,
+                debug_dir=args.debug_dir,
             )
         else:
             model = args.model or "openai/gpt-oss-120b"
