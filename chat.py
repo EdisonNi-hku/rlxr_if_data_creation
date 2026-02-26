@@ -4,6 +4,7 @@ import sys
 import time
 import logging
 import json
+import re
 import diskcache as dc
 import threading
 import requests
@@ -30,6 +31,27 @@ GENERATION_CONFIGS = {
     "gpt-5.1-2025-11-13": {"reasoning_effort": 'medium'},
     "gpt-5-mini-2025-08-07": {"reasoning_effort": 'medium'},
 }
+
+TRANSIENT_REPLY_PATTERNS = (
+    r"\b429\b",
+    r"mpe-429",
+    r"resource exhausted",
+    r"resource_exhausted",
+    r"rate limit",
+    r"too many requests",
+    r"请求服务异常",
+    r"模型提供方限流",
+)
+
+RETRY_BACKOFF_SECONDS = (1, 2, 5, 10, 20)
+
+
+def _is_transient_error_reply(reply: str) -> bool:
+    if not reply:
+        return False
+    text = reply.strip().lower()
+    return any(re.search(pattern, text) for pattern in TRANSIENT_REPLY_PATTERNS)
+
 
 
 class LocalChat:
@@ -69,27 +91,44 @@ class LocalChat:
     def ask(self, messages: list[dict], **kwargs) -> str:
         cache_key = json.dumps(messages, ensure_ascii=False, sort_keys=True)
         reply, reasoning_content = self.cache.get((self.model, cache_key), ('', ''))
-        if reply == '':
-            chat = self._send_request(messages, self.generation_config)
-            if chat is None:
-                reply, reasoning_content = '', ''
-            else:
-                reasoning_content = getattr(chat.choices[0].message, "reasoning_content", "")
-                reply = chat.choices[0].message.content
-                if '</think>' in reply:
-                    response_list = reply.split('</think>')
-                    reply = response_list[1].strip()
-                    reasoning_content = response_list[0].strip()
-
+        if reply != '' and _is_transient_error_reply(reply):
+            print("Ignoring cached transient error response and retrying request")
+            reply, reasoning_content = '', ''
             with self._lock:
-                self.cache[(self.model, cache_key)] = (reply, reasoning_content)
+                if (self.model, cache_key) in self.cache:
+                    del self.cache[(self.model, cache_key)]
+
+        if reply == '':
+            for i, sleep_time in enumerate(RETRY_BACKOFF_SECONDS):
+                chat = self._send_request(messages, self.generation_config)
+                if chat is None:
+                    reply, reasoning_content = '', ''
+                else:
+                    reasoning_content = getattr(chat.choices[0].message, "reasoning_content", "")
+                    reply = chat.choices[0].message.content
+                    if '</think>' in reply:
+                        response_list = reply.split('</think>')
+                        reply = response_list[1].strip()
+                        reasoning_content = response_list[0].strip()
+
+                if reply and not _is_transient_error_reply(reply):
+                    break
+
+                if i < len(RETRY_BACKOFF_SECONDS) - 1:
+                    log.info(
+                        f"Transient/empty reply from {self.model}; retry #{i + 1}/"
+                        f"{len(RETRY_BACKOFF_SECONDS)} after {sleep_time}s."
+                    )
+                    time.sleep(sleep_time)
+
+            if reply and not _is_transient_error_reply(reply):
+                with self._lock:
+                    self.cache[(self.model, cache_key)] = (reply, reasoning_content)
         else:
-            # pass
             print("Loaded from cache")
 
         if not reply:
             print("Reply is empty")
-            print(f"Chat object: {chat}")
 
         low = reply.lower()
         if "please provide" in low or "to assist you" in low or "as an ai language model" in low:
@@ -370,6 +409,13 @@ class ApiChat:
         reply, reasoning_content = self.cache.get(
             (self.model, cache_key), ("", "")
         )
+        if reply != "" and _is_transient_error_reply(reply):
+            print("[ApiChat] Ignoring cached transient error response and retrying request")
+            reply, reasoning_content = "", ""
+            with self._lock:
+                if (self.model, cache_key) in self.cache:
+                    del self.cache[(self.model, cache_key)]
+
         if reply != "":
             return reply, reasoning_content
 
@@ -381,26 +427,38 @@ class ApiChat:
                 content = [{"type": "text", "text": content}]
             prompt.append({"role": msg["role"], "content": content})
 
-        response_json = self._send_request(prompt, params)
-        if response_json is None:
-            print("[ApiChat] _send_request returned None")
-            reply, reasoning_content = "", ""
-        else:
-            reply = self._extract_reply(response_json)
-            reasoning_content = self._extract_reasoning(response_json)
-            if not reply:
-                # Reply extraction failed — dump the response for debugging
-                resp_str = json.dumps(response_json, ensure_ascii=False)
-                print(f"[ApiChat] _extract_reply returned empty string")
-                print(f"[ApiChat] Response keys: {list(response_json.keys()) if isinstance(response_json, dict) else type(response_json).__name__}")
-                print(f"[ApiChat] Full response (first 1000 chars): {resp_str[:1000]}")
-            if "</think>" in reply:
-                parts = reply.split("</think>")
-                reply = parts[1].strip()
-                reasoning_content = parts[0].strip()
+        for i, sleep_time in enumerate(RETRY_BACKOFF_SECONDS):
+            response_json = self._send_request(prompt, params)
+            if response_json is None:
+                print("[ApiChat] _send_request returned None")
+                reply, reasoning_content = "", ""
+            else:
+                reply = self._extract_reply(response_json)
+                reasoning_content = self._extract_reasoning(response_json)
+                if not reply:
+                    # Reply extraction failed — dump the response for debugging
+                    resp_str = json.dumps(response_json, ensure_ascii=False)
+                    print(f"[ApiChat] _extract_reply returned empty string")
+                    print(f"[ApiChat] Response keys: {list(response_json.keys()) if isinstance(response_json, dict) else type(response_json).__name__}")
+                    print(f"[ApiChat] Full response (first 1000 chars): {resp_str[:1000]}")
+                if "</think>" in reply:
+                    parts = reply.split("</think>")
+                    reply = parts[1].strip()
+                    reasoning_content = parts[0].strip()
 
-        with self._lock:
-            self.cache[(self.model, cache_key)] = (reply, reasoning_content)
+            if reply and not _is_transient_error_reply(reply):
+                break
+
+            if i < len(RETRY_BACKOFF_SECONDS) - 1:
+                print(
+                    f"[ApiChat] Transient/empty reply detected; retry #{i + 1}/"
+                    f"{len(RETRY_BACKOFF_SECONDS)} after {sleep_time}s."
+                )
+                time.sleep(sleep_time)
+
+        if reply and not _is_transient_error_reply(reply):
+            with self._lock:
+                self.cache[(self.model, cache_key)] = (reply, reasoning_content)
 
         low = reply.lower()
         if "please provide" in low or "to assist you" in low or "as an ai language model" in low:
