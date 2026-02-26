@@ -8,7 +8,6 @@ import json
 import os
 import random
 import re
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
@@ -239,21 +238,6 @@ def main() -> None:
         help="Maximum number of in-flight requests.",
     )
     parser.add_argument(
-        "--rerun_skipped_rounds",
-        type=int,
-        default=1,
-        help=(
-            "Number of extra rounds to rerun samples skipped due to API failures "
-            "using the same cache (default: 1)."
-        ),
-    )
-    parser.add_argument(
-        "--rerun_sleep_seconds",
-        type=float,
-        default=2.0,
-        help="Sleep time between rerun rounds in seconds (default: 2.0).",
-    )
-    parser.add_argument(
         "--no_system",
         action="store_true",
         help=(
@@ -290,12 +274,6 @@ def main() -> None:
         parser.error("--partition_num must be >= 1")
     if args.partition_index < 0 or args.partition_index >= args.partition_num:
         parser.error(f"--partition_index must be in range [0, {args.partition_num - 1}]")
-    if args.rerun_skipped_rounds < 0:
-        parser.error("--rerun_skipped_rounds must be >= 0")
-    if args.rerun_sleep_seconds < 0:
-        parser.error("--rerun_sleep_seconds must be >= 0")
-    if args.streaming and args.rerun_skipped_rounds > 0 and not args.save_prompts_jsonl:
-        parser.error("Rerun skipped logic is not supported with streaming mode.")
 
     system_prompt_template = load_prompt(args.system_prompt_path)
     all_constraints = load_reference_constraints(args.reference_constraints_path)
@@ -440,86 +418,47 @@ def main() -> None:
         print(f"Done! Saved {processed} prompts to {args.save_prompts_jsonl}, skipped {skipped}.")
         return
 
-    # Mode 2: Call vLLM and save results (with reruns for skipped/API-failed samples)
-    work_items: list[tuple[int, dict]] = []
-    for index, example in iterator:
-        if index < args.start_index:
-            continue
-        if args.max_samples is not None and submitted >= args.max_samples:
-            break
-        work_items.append((index, example))
-        submitted += 1
+    # Mode 2: Call vLLM and save results
+    pbar = tqdm(total=limit, unit="sample", desc="Augmenting")
 
-    total_rounds = 1 + args.rerun_skipped_rounds
-    pending_items = work_items
-
-    for round_idx in range(total_rounds):
-        if not pending_items:
-            break
-
-        round_success = 0
-        round_failed = 0
-        pbar = tqdm(
-            total=len(pending_items),
-            unit="sample",
-            desc=f"Augmenting (round {round_idx + 1}/{total_rounds})",
-        )
-        next_pending: list[tuple[int, dict]] = []
-
-        def handle_future(future, item: tuple[int, dict]):
-            nonlocal processed, skipped, round_success, round_failed
-            index, _ = item
-            try:
-                result = future.result()
-                if result is None:
-                    next_pending.append(item)
-                    skipped += 1
-                    round_failed += 1
-                else:
-                    results_map[index] = result
-                    processed += 1
-                    round_success += 1
-            except Exception as exc:
-                next_pending.append(item)
+    def handle_future(future, index: int):
+        nonlocal processed, skipped
+        try:
+            result = future.result()
+            if result is None:
                 skipped += 1
-                round_failed += 1
-                tqdm.write(f"Error generating sample at index {index}: {exc}")
-            pbar.update(1)
-            pbar.set_postfix({"✓": round_success, "✗": round_failed})
+            else:
+                results_map[index] = result
+                processed += 1
+        except Exception as exc:
+            skipped += 1
+            tqdm.write(f"Error generating sample: {exc}")
+        pbar.update(1)
+        pbar.set_postfix({"✓": processed, "✗": skipped})
 
-        with ThreadPoolExecutor(max_workers=max(1, args.num_workers)) as executor:
-            futures: dict = {}
-            for item in pending_items:
-                index, example = item
-                future = executor.submit(build_result, index, example)
-                futures[future] = item
+    with ThreadPoolExecutor(max_workers=max(1, args.num_workers)) as executor:
+        futures: dict = {}
+        for index, example in iterator:
+            if index < args.start_index:
+                continue
+            if args.max_samples is not None and submitted >= args.max_samples:
+                break
+            future = executor.submit(build_result, index, example)
+            futures[future] = index
+            submitted += 1
 
-                if len(futures) >= max_inflight:
-                    for future in as_completed(futures):
-                        item_done = futures.pop(future)
-                        handle_future(future, item_done)
-                        if len(futures) < max_inflight:
-                            break
+            if len(futures) >= max_inflight:
+                for future in as_completed(futures):
+                    index = futures.pop(future)
+                    handle_future(future, index)
+                    if len(futures) < max_inflight:
+                        break
 
-            for future in as_completed(futures):
-                item_done = futures.pop(future)
-                handle_future(future, item_done)
+        for future in as_completed(futures):
+            index = futures.pop(future)
+            handle_future(future, index)
 
-        pbar.close()
-        pending_items = next_pending
-        print(
-            f"[ROUND {round_idx + 1}/{total_rounds}] "
-            f"success={round_success}, failed={round_failed}, pending={len(pending_items)}"
-        )
-
-        if pending_items and round_idx < total_rounds - 1 and args.rerun_sleep_seconds > 0:
-            print(
-                f"Sleeping {args.rerun_sleep_seconds}s before retrying "
-                f"{len(pending_items)} skipped samples..."
-            )
-            time.sleep(args.rerun_sleep_seconds)
-
-    final_skipped = len(pending_items)
+    pbar.close()
     results = [results_map[idx] for idx in sorted(results_map)]
 
     if not results:
@@ -536,7 +475,7 @@ def main() -> None:
             for row in results:
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
-    print(f"Done! Augmented {processed} samples, skipped {final_skipped}.")
+    print(f"Done! Augmented {processed} samples, skipped {skipped}.")
 
 
 if __name__ == "__main__":
