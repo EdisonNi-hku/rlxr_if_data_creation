@@ -9,6 +9,7 @@ import os
 import random
 import re
 import threading
+import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
@@ -262,6 +263,21 @@ def main() -> None:
         help="Maximum number of in-flight requests.",
     )
     parser.add_argument(
+        "--rerun_skipped_rounds",
+        type=int,
+        default=1,
+        help=(
+            "Number of extra rounds to rerun skipped rows in analysis mode "
+            "using the same cache (default: 1)."
+        ),
+    )
+    parser.add_argument(
+        "--rerun_sleep_seconds",
+        type=float,
+        default=2.0,
+        help="Sleep time between rerun rounds in seconds (default: 2.0).",
+    )
+    parser.add_argument(
         "--no_system",
         action="store_true",
         help="Prepend system prompt to user prompt as a single user message.",
@@ -304,6 +320,10 @@ def main() -> None:
         parser.error("--partition_num must be >= 1")
     if args.partition_index < 0 or args.partition_index >= args.partition_num:
         parser.error(f"--partition_index must be in range [0, {args.partition_num - 1}]")
+    if args.rerun_skipped_rounds < 0:
+        parser.error("--rerun_skipped_rounds must be >= 0")
+    if args.rerun_sleep_seconds < 0:
+        parser.error("--rerun_sleep_seconds must be >= 0")
 
     system_prompt = load_prompt(args.system_prompt_path)
     user_prompt_template = load_prompt(args.user_prompt_path)
@@ -537,54 +557,87 @@ def main() -> None:
         print(f"Done! Saved {len(prompts_list)} prompts ({processed} rows) to {args.save_prompts_jsonl}, skipped {skipped}.")
         return
 
-    # Mode 2: Call vLLM and save results
+    # Mode 2: Call vLLM and save results (with reruns for skipped rows)
     results_map: dict[int, dict] = {}
-    pbar = tqdm(total=limit, unit="sample", desc="Quality analysis")
+    total_rounds = 1 + args.rerun_skipped_rounds
+    pending_indices = list(indices)
 
-    def handle_future(future, idx: int):
-        nonlocal processed, skipped
-        try:
-            result = future.result()
-            if result is None:
+    for round_idx in range(total_rounds):
+        if not pending_indices:
+            break
+
+        round_ok = 0
+        round_skip = 0
+        next_pending: list[int] = []
+        pbar = tqdm(
+            total=len(pending_indices),
+            unit="sample",
+            desc=f"Quality analysis (round {round_idx + 1}/{total_rounds})",
+        )
+
+        def handle_future(future, idx: int):
+            nonlocal processed, skipped, round_ok, round_skip
+            try:
+                result = future.result()
+                if result is None:
+                    skipped += 1
+                    round_skip += 1
+                    next_pending.append(idx)
+                else:
+                    results_map[idx] = result
+                    processed += 1
+                    round_ok += 1
+            except Exception as exc:
                 skipped += 1
-            else:
-                results_map[idx] = result
-                processed += 1
-        except Exception as exc:
-            skipped += 1
-            with fail_lock:
-                fail_counts["exception"] += 1
-            tqdm.write(
-                f"[ERROR] idx={idx}: exception in build_result\n"
-                f"  {type(exc).__name__}: {exc}\n"
-                f"  {''.join(traceback.format_tb(exc.__traceback__))}"
+                round_skip += 1
+                next_pending.append(idx)
+                with fail_lock:
+                    fail_counts["exception"] += 1
+                tqdm.write(
+                    f"[ERROR] idx={idx}: exception in build_result\n"
+                    f"  {type(exc).__name__}: {exc}\n"
+                    f"  {''.join(traceback.format_tb(exc.__traceback__))}"
+                )
+            pbar.update(1)
+            pbar.set_postfix({"ok": round_ok, "skip": round_skip})
+
+        with ThreadPoolExecutor(max_workers=max(1, args.num_workers)) as executor:
+            futures: dict = {}
+            for idx in pending_indices:
+                future = executor.submit(build_result, idx)
+                futures[future] = idx
+
+                if len(futures) >= max_inflight:
+                    for done in as_completed(futures):
+                        done_idx = futures.pop(done)
+                        handle_future(done, done_idx)
+                        if len(futures) < max_inflight:
+                            break
+
+            for done in as_completed(futures):
+                done_idx = futures.pop(done)
+                handle_future(done, done_idx)
+
+        pbar.close()
+        pending_indices = next_pending
+        print(
+            f"[ROUND {round_idx + 1}/{total_rounds}] "
+            f"success={round_ok}, failed={round_skip}, pending={len(pending_indices)}"
+        )
+
+        if pending_indices and round_idx < total_rounds - 1 and args.rerun_sleep_seconds > 0:
+            print(
+                f"Sleeping {args.rerun_sleep_seconds}s before retrying "
+                f"{len(pending_indices)} skipped rows..."
             )
-        pbar.update(1)
-        pbar.set_postfix({"ok": processed, "skip": skipped})
+            time.sleep(args.rerun_sleep_seconds)
 
-    with ThreadPoolExecutor(max_workers=max(1, args.num_workers)) as executor:
-        futures: dict = {}
-        for idx in indices:
-            future = executor.submit(build_result, idx)
-            futures[future] = idx
-
-            if len(futures) >= max_inflight:
-                for done in as_completed(futures):
-                    done_idx = futures.pop(done)
-                    handle_future(done, done_idx)
-                    if len(futures) < max_inflight:
-                        break
-
-        for done in as_completed(futures):
-            done_idx = futures.pop(done)
-            handle_future(done, done_idx)
-
-    pbar.close()
+    final_skipped = len(pending_indices)
 
     # Print failure breakdown
     total_failures = sum(fail_counts.values())
-    if total_failures > 0 or skipped > 0:
-        print(f"\n--- Failure breakdown ({skipped} skipped out of {limit}) ---")
+    if total_failures > 0 or final_skipped > 0:
+        print(f"\n--- Failure breakdown ({final_skipped} skipped out of {limit}) ---")
         for reason, count in fail_counts.items():
             if count > 0:
                 print(f"  {reason}: {count}")
@@ -595,7 +648,7 @@ def main() -> None:
         print(f"\nNo samples processed. Nothing to save.")
         print(f"  Total attempted: {limit}")
         print(f"  Processed: {processed}")
-        print(f"  Skipped: {skipped}")
+        print(f"  Skipped: {final_skipped}")
         print(f"\nTroubleshooting:")
         if fail_counts["empty_instruction"] > 0:
             print(f"  - {fail_counts['empty_instruction']} rows had empty 'instruction' field. "
@@ -622,7 +675,7 @@ def main() -> None:
         for row in results:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
-    print(f"\nDone! Analyzed {processed} samples, skipped {skipped}. Output: {args.output}")
+    print(f"\nDone! Analyzed {processed} samples, skipped {final_skipped}. Output: {args.output}")
 
 
 if __name__ == "__main__":
